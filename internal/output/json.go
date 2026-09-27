@@ -7,10 +7,11 @@ import (
 	"haystack/internal/findings"
 )
 
-// JSONReport represents the top-level JSON structure.
+// JSONReport represents the top-level JSON structure per DESIGN_PLAN Section 25.
 type JSONReport struct {
 	Version  string             `json:"version"`
 	Summary  ScanSummary        `json:"summary"`
+	Analysis AnalysisStats      `json:"analysis"`
 	Findings []findings.Finding `json:"findings"`
 }
 
@@ -29,6 +30,7 @@ func (jf *JSONFormatter) Format(w io.Writer, list []findings.Finding, summary Sc
 	report := JSONReport{
 		Version:  "0.1.0",
 		Summary:  summary,
+		Analysis: summary.Analysis,
 		Findings: list,
 	}
 

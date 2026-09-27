@@ -32,6 +32,11 @@ func NewNormalizer(cls classifier.Classifier, opts NormalizerOptions) *Normalize
 
 // Normalize processes candidate findings into final normalized Finding objects.
 func (n *Normalizer) Normalize(ctx context.Context, candidates []rules.CandidateFinding) ([]Finding, error) {
+	return n.NormalizeWithMetadata(ctx, candidates, nil)
+}
+
+// NormalizeWithMetadata processes candidate findings into final normalized Finding objects with plan metadata.
+func (n *Normalizer) NormalizeWithMetadata(ctx context.Context, candidates []rules.CandidateFinding, metaMap map[string]*AnalysisMetadata) ([]Finding, error) {
 	var results []Finding
 
 	for i, c := range candidates {
@@ -88,26 +93,38 @@ func (n *Normalizer) Normalize(ctx context.Context, candidates []rules.Candidate
 		findingID := fmt.Sprintf("%s-%s-%d-%d", c.RuleID, strings.ReplaceAll(c.Evidence.File, "/", "-"), c.Evidence.Line, i+1)
 		fingerprint := CalculateFingerprint(c.RuleID, c.Evidence.File, c.Evidence)
 
+		var analysisMeta *AnalysisMetadata
+		if metaMap != nil {
+			if m, ok := metaMap[c.Evidence.CandidateID]; ok {
+				analysisMeta = m
+			} else if m, ok := metaMap[c.Evidence.File]; ok {
+				analysisMeta = m
+			} else if m, ok := metaMap["*"]; ok {
+				analysisMeta = m
+			}
+		}
+
 		results = append(results, Finding{
-			ID:             findingID,
-			Fingerprint:    fingerprint,
-			RuleID:         c.RuleID,
-			RuleName:       c.RuleName,
-			File:           c.Evidence.File,
-			Line:           c.Evidence.Line,
-			Column:         c.Evidence.Column,
-			Category:       c.Category,
-			Model:          res.Model,
-			CWE:            []string{c.CWE},
-			CWEName:        weakness.Name,
-			Severity:       sev,
-			Confidence:     res.Confidence,
-			Probabilities:  res.Probabilities,
-			Description:    weakness.Description,
-			Remediation:    weakness.Remediation,
-			References:     weakness.References,
-			Evidence:       c.Evidence,
-			Classification: resPtr,
+			ID:               findingID,
+			Fingerprint:      fingerprint,
+			RuleID:           c.RuleID,
+			RuleName:         c.RuleName,
+			File:             c.Evidence.File,
+			Line:             c.Evidence.Line,
+			Column:           c.Evidence.Column,
+			Category:         c.Category,
+			Model:            res.Model,
+			CWE:              []string{c.CWE},
+			CWEName:          weakness.Name,
+			Severity:         sev,
+			Confidence:       res.Confidence,
+			Probabilities:    res.Probabilities,
+			Description:      weakness.Description,
+			Remediation:      weakness.Remediation,
+			References:       weakness.References,
+			Evidence:         c.Evidence,
+			Classification:   resPtr,
+			AnalysisMetadata: analysisMeta,
 		})
 	}
 

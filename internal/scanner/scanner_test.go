@@ -94,3 +94,73 @@ func TestScannerServiceScanRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestScanCodeAdaptiveMetadata(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.AnalysisStrategy = "adaptive"
+	orch := NewOrchestrator(cfg)
+
+	code := `package main
+import (
+	"net/http"
+	"os/exec"
+)
+func handler(w http.ResponseWriter, r *http.Request) {
+	cmd := r.URL.Query().Get("cmd")
+	exec.Command("sh", "-c", cmd).Run()
+}
+`
+
+	findings, summary, err := orch.ScanCode(context.Background(), []byte(code), "go", "main.go")
+	if err != nil {
+		t.Fatalf("unexpected scan error: %v", err)
+	}
+
+	if len(findings) == 0 {
+		t.Fatal("expected at least 1 finding, got 0")
+	}
+
+	if summary.Analysis.Strategy != "adaptive" {
+		t.Errorf("expected strategy 'adaptive', got %s", summary.Analysis.Strategy)
+	}
+	if summary.Analysis.CandidatesDiscovered != 1 {
+		t.Errorf("expected 1 candidate discovered, got %d", summary.Analysis.CandidatesDiscovered)
+	}
+	if summary.Analysis.CandidatesAnalyzed != 1 {
+		t.Errorf("expected 1 candidate analyzed, got %d", summary.Analysis.CandidatesAnalyzed)
+	}
+
+	meta := findings[0].AnalysisMetadata
+	if meta == nil {
+		t.Fatal("expected AnalysisMetadata to be populated, got nil")
+	}
+	if meta.Strategy != "adaptive" {
+		t.Errorf("expected metadata strategy 'adaptive', got %s", meta.Strategy)
+	}
+	if meta.Priority < 70 {
+		t.Errorf("expected high priority in metadata, got %d", meta.Priority)
+	}
+}
+
+func TestGetAnalysisPlan(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.TargetDir = "../../testdata/go"
+
+	scannerSvc := NewScanner(cfg)
+	req := ScanRequest{
+		Paths:    []string{"../../testdata/go"},
+		Strategy: "adaptive",
+	}
+
+	plan, err := scannerSvc.GetAnalysisPlan(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GetAnalysisPlan failed: %v", err)
+	}
+
+	if plan == nil {
+		t.Fatal("expected non-nil plan")
+	}
+	if len(plan.Candidates) == 0 {
+		t.Errorf("expected candidates in plan, got 0")
+	}
+}

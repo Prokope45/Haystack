@@ -53,16 +53,26 @@ type Operation struct {
 
 // Evidence captures the deterministic static analysis proof of a security-relevant flow.
 type Evidence struct {
-	File       string      `json:"file"`
-	Line       int         `json:"line"`
-	Column     int         `json:"column"`
-	Language   string      `json:"language"`
-	Source     Source      `json:"source"`
-	Sink       Sink        `json:"sink"`
-	Operations []Operation `json:"operations"`
-	FlowSteps  []string    `json:"flow_steps"`
-	Code       string      `json:"code"`
-	Context    string      `json:"context,omitempty"`
+	File        string      `json:"file"`
+	Line        int         `json:"line"`
+	Column      int         `json:"column"`
+	Language    string      `json:"language"`
+	CandidateID string      `json:"candidate_id,omitempty"`
+	Mode        string      `json:"mode,omitempty"`
+	Source      Source      `json:"source"`
+	Sink        Sink        `json:"sink"`
+	Operations  []Operation `json:"operations"`
+	FlowSteps   []string    `json:"flow_steps"`
+	Code        string      `json:"code"`
+	Context     string      `json:"context,omitempty"`
+}
+
+// AnalysisDirectives provides execution constraints (mode, depth, candidate association) to an analyzer.
+type AnalysisDirectives struct {
+	Analyze     bool   `json:"analyze"`
+	Mode        string `json:"mode"`
+	MaxDepth    int    `json:"max_depth"`
+	CandidateID string `json:"candidate_id"`
 }
 
 // Analyzer is the common interface implemented by language-specific static analyzers.
@@ -70,4 +80,10 @@ type Analyzer interface {
 	Language() string
 	Supports(path string) bool
 	Analyze(ctx context.Context, source []byte, path string) ([]Evidence, error)
+}
+
+// AdaptiveAnalyzer extends Analyzer with the capability to accept analysis directives from a planner.
+type AdaptiveAnalyzer interface {
+	Analyzer
+	SetDirectives(directives map[string]AnalysisDirectives)
 }

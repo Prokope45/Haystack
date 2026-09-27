@@ -129,6 +129,38 @@ func (s *Server) registerTools() {
 						Type:        "number",
 						Description: "Optional minimum confidence threshold (0.0 to 1.0).",
 					},
+					"strategy": {
+						Type:        "string",
+						Description: "Optional analysis strategy: 'adaptive' (default) or 'full'.",
+						Enum:        []string{"adaptive", "full"},
+					},
+					"ai_planner": {
+						Type:        "boolean",
+						Description: "Optional boolean to consult the external AI planner for candidate triage.",
+					},
+				},
+			},
+		},
+		{
+			Name: "get_analysis_plan",
+			Description: "Inspect security candidate triage and the scanner's adaptive analysis plan without executing full static analysis. " +
+				"Returns candidate prioritization, estimated analysis depth, and mode (shallow, medium, deep) per DESIGN_PLAN.md Section 28.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]PropertyDef{
+					"path": {
+						Type:        "string",
+						Description: "Optional target directory or file path. Defaults to workspace root.",
+					},
+					"strategy": {
+						Type:        "string",
+						Description: "Optional analysis strategy: 'adaptive' or 'full'. Defaults to 'adaptive'.",
+						Enum:        []string{"adaptive", "full"},
+					},
+					"ai_planner": {
+						Type:        "boolean",
+						Description: "Optional boolean to consult the external AI planner for candidate triage.",
+					},
 				},
 			},
 		},
@@ -494,6 +526,8 @@ func (s *Server) handleToolsCall(req JSONRPCRequest) *JSONRPCResponse {
 		return s.callScanFile(req.ID, ctx, params.Arguments)
 	case "scan_code":
 		return s.callScanCode(req.ID, ctx, params.Arguments)
+	case "get_analysis_plan":
+		return s.callGetAnalysisPlan(req.ID, ctx, params.Arguments)
 
 	// Findings tools
 	case "explain_finding":

@@ -9,6 +9,7 @@ import (
 	"haystack/internal/config"
 	"haystack/internal/findings"
 	"haystack/internal/issues/providers/mock"
+	"haystack/internal/planning"
 )
 
 func TestMCPInitialize(t *testing.T) {
@@ -64,7 +65,7 @@ func TestMCPToolsList(t *testing.T) {
 	}
 
 	expectedTools := []string{
-		"scan", "scan_diff", "scan_file", "scan_code",
+		"scan", "scan_diff", "scan_file", "scan_code", "get_analysis_plan",
 		"explain_finding", "get_remediation", "get_security_status",
 		"prepare_issue", "create_issue", "update_issue", "close_issue",
 	}
@@ -282,6 +283,52 @@ func TestMCPServeStream(t *testing.T) {
 
 	if resp.Error != nil {
 		t.Errorf("unexpected error in ping: %v", resp.Error)
+	}
+}
+
+func TestMCPGetAnalysisPlan(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.TargetDir = "../../testdata/go"
+	server := NewServer(cfg)
+
+	params := ToolCallParams{
+		Name: "get_analysis_plan",
+		Arguments: map[string]interface{}{
+			"path":     "../../testdata/go",
+			"strategy": "adaptive",
+		},
+	}
+	paramsRaw, _ := json.Marshal(params)
+
+	req := JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      10,
+		Method:  "tools/call",
+		Params:  paramsRaw,
+	}
+	raw, _ := json.Marshal(req)
+
+	resp := server.HandleMessage(raw)
+	if resp == nil || resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+
+	toolResult, ok := resp.Result.(ToolCallResult)
+	if !ok {
+		t.Fatalf("expected ToolCallResult, got %T", resp.Result)
+	}
+
+	if toolResult.IsError {
+		t.Errorf("expected IsError false for get_analysis_plan")
+	}
+
+	plan, ok := toolResult.Meta["plan"].(*planning.AnalysisPlan)
+	if !ok || plan == nil {
+		t.Fatalf("expected non-nil AnalysisPlan in meta, got %T", toolResult.Meta["plan"])
+	}
+
+	if len(plan.Candidates) == 0 {
+		t.Errorf("expected candidates in plan, got 0")
 	}
 }
 

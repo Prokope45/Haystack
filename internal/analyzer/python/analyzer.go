@@ -19,12 +19,17 @@ var bridgeScript string
 // PythonAnalyzer implements the analyzer.Analyzer interface for Python source files.
 type PythonAnalyzer struct {
 	PythonBinary string
+	directives   map[string]analyzer.AnalysisDirectives
 }
 
 func NewPythonAnalyzer() *PythonAnalyzer {
 	return &PythonAnalyzer{
 		PythonBinary: "python3",
 	}
+}
+
+func (pa *PythonAnalyzer) SetDirectives(directives map[string]analyzer.AnalysisDirectives) {
+	pa.directives = directives
 }
 
 func (pa *PythonAnalyzer) Language() string {
@@ -36,6 +41,31 @@ func (pa *PythonAnalyzer) Supports(path string) bool {
 }
 
 func (pa *PythonAnalyzer) Analyze(ctx context.Context, source []byte, filePath string) ([]analyzer.Evidence, error) {
+	baseNameSanitized := sanitizePyIdentifier(filepath.Base(filePath))
+
+	if len(pa.directives) > 0 {
+		hasActive := false
+		for k, d := range pa.directives {
+			if strings.Contains(k, baseNameSanitized) {
+				if d.Analyze {
+					hasActive = true
+					break
+				}
+			}
+		}
+		// If directives exist for this file but none are active, skip analysis
+		hasAny := false
+		for k := range pa.directives {
+			if strings.Contains(k, baseNameSanitized) {
+				hasAny = true
+				break
+			}
+		}
+		if hasAny && !hasActive {
+			return nil, nil
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, pa.PythonBinary, "-c", bridgeScript, filePath)
 
 	var stdout bytes.Buffer
@@ -68,7 +98,25 @@ func (pa *PythonAnalyzer) Analyze(ctx context.Context, source []byte, filePath s
 			rawEvidences[i].File = filePath
 		}
 		rawEvidences[i].Language = "python"
+		rawEvidences[i].Mode = "deep"
+
+		if len(pa.directives) > 0 {
+			for k, d := range pa.directives {
+				if strings.Contains(k, baseNameSanitized) {
+					rawEvidences[i].CandidateID = d.CandidateID
+					rawEvidences[i].Mode = d.Mode
+					break
+				}
+			}
+		}
 	}
 
 	return rawEvidences, nil
+}
+
+func sanitizePyIdentifier(s string) string {
+	s = strings.ReplaceAll(s, ".", "_")
+	s = strings.ReplaceAll(s, "-", "_")
+	s = strings.ReplaceAll(s, "/", "_")
+	return s
 }

@@ -91,6 +91,81 @@ func TestJSONFormatter(t *testing.T) {
 	}
 }
 
+func TestJSONFormatterWithAnalysisTelemetry(t *testing.T) {
+	jf := NewJSONFormatter()
+	buf := new(bytes.Buffer)
+
+	summary := ScanSummary{
+		FilesScanned:  2,
+		GoFiles:       2,
+		FindingsCount: 1,
+		Analysis: AnalysisStats{
+			Strategy:             "adaptive",
+			CandidatesDiscovered: 5,
+			CandidatesAnalyzed:   3,
+			CandidatesSkipped:    2,
+			DeepAnalyses:         1,
+			MediumAnalyses:       2,
+		},
+	}
+
+	err := jf.Format(buf, []findings.Finding{sampleFinding()}, summary)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed JSONReport
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("failed to unmarshal JSON output: %v", err)
+	}
+
+	if parsed.Analysis.Strategy != "adaptive" {
+		t.Errorf("expected strategy adaptive, got %s", parsed.Analysis.Strategy)
+	}
+	if parsed.Analysis.CandidatesDiscovered != 5 {
+		t.Errorf("expected 5 candidates discovered, got %d", parsed.Analysis.CandidatesDiscovered)
+	}
+}
+
+func TestTextFormatterVerboseAnalysis(t *testing.T) {
+	tf := NewVerboseTextFormatter(true, true)
+	buf := new(bytes.Buffer)
+
+	summary := ScanSummary{
+		FilesScanned:  1,
+		GoFiles:       1,
+		FindingsCount: 1,
+		Analysis: AnalysisStats{
+			Strategy:             "adaptive",
+			CandidatesDiscovered: 4,
+			CandidatesAnalyzed:   3,
+			CandidatesSkipped:    1,
+			DeepAnalyses:         2,
+			MediumAnalyses:       1,
+		},
+	}
+
+	f := sampleFinding()
+	f.AnalysisMetadata = &findings.AnalysisMetadata{
+		Strategy:        "adaptive",
+		Priority:        85,
+		Depth:           6,
+		PlannerProvider: "deterministic",
+	}
+
+	if err := tf.Format(buf, []findings.Finding{f}, summary); err != nil {
+		t.Fatalf("Format failed: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Analysis Telemetry") {
+		t.Errorf("expected output to contain 'Analysis Telemetry'")
+	}
+	if !strings.Contains(out, "Strategy:   adaptive") {
+		t.Errorf("expected finding to display strategy adaptive")
+	}
+}
+
 func TestSARIFFormatter(t *testing.T) {
 	sf := NewSARIFFormatter()
 	buf := new(bytes.Buffer)

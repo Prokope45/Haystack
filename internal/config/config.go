@@ -21,27 +21,37 @@ const (
 
 // Config represents the parsed configuration for a scan run.
 type Config struct {
-	TargetDir          string
-	Format             string // text, json, sarif
-	MinSeverity        string // low, medium, high, critical
-	MinConfidence      float64
-	FailOn             string // none, low, medium, high, critical
-	ExcludeDirs        []string
-	NoColor            bool
-	Verbose            bool
-	ShowVersion        bool
-	DiffRange          string        // Git diff range (e.g. HEAD~1, main...HEAD)
-	ClassifierEnabled  bool          // Whether classifier is explicitly enabled
-	ClassifierProvider string        // kev, jev, heuristic, rlcd
-	ClassifierEndpoint string        // Optional remote RLCD/Kev/Jev classifier URL
-	ClassifierModel    string        // heuristic, kev, jev, rlcd, or custom model identifier
-	ClassifierAPIKey   string        // Optional auth token for remote model API
-	ClassifierTimeout  time.Duration // Timeout for classifier requests
-	OpenRouterAPIKey   string        // OpenRouter API key for Jev
-	OpenRouterModel    string        // OpenRouter model for explanation LLM (default: openrouter/free)
-	OpenRouterBaseURL  string        // OpenRouter API base URL
-	SystemOneModel     string        // Jev decision model (default: ~typesafe/jev-latest)
-	KevEndpoint        string        // Local Kev endpoint (default: http://localhost:8080/classify)
+	TargetDir               string
+	Format                  string // text, json, sarif
+	MinSeverity             string // low, medium, high, critical
+	MinConfidence           float64
+	FailOn                  string // none, low, medium, high, critical
+	ExcludeDirs             []string
+	NoColor                 bool
+	Verbose                 bool
+	ShowVersion             bool
+	DiffRange               string        // Git diff range (e.g. HEAD~1, main...HEAD)
+	ClassifierEnabled       bool          // Whether classifier is explicitly enabled
+	ClassifierProvider      string        // kev, jev, heuristic, rlcd
+	ClassifierEndpoint      string        // Optional remote RLCD/Kev/Jev classifier URL
+	ClassifierModel         string        // heuristic, kev, jev, rlcd, or custom model identifier
+	ClassifierAPIKey        string        // Optional auth token for remote model API
+	ClassifierTimeout       time.Duration // Timeout for classifier requests
+	OpenRouterAPIKey        string        // OpenRouter API key for Jev
+	OpenRouterModel         string        // OpenRouter model for explanation LLM (default: openrouter/free)
+	OpenRouterBaseURL       string        // OpenRouter API base URL
+	SystemOneModel          string        // Jev decision model (default: ~typesafe/jev-latest)
+	KevEndpoint             string        // Local Kev endpoint (default: http://localhost:8080/classify)
+	AnalysisStrategy        string        // Analysis strategy: adaptive, full (default: adaptive)
+	AIPlannerEnabled        bool          // Enable external AI candidate planner
+	AIClassifierEnabled     bool          // Enable external AI finding classifier
+	AIMode                  string        // disabled, optional, required (default: optional)
+	MaxDepth                int           // Maximum data flow search depth (default: 8)
+	MaxInterproceduralDepth int           // Maximum interprocedural call depth (default: 5)
+	MaxCandidates           int           // Maximum candidate flows to analyze (default: 1000)
+	MaxDeepCandidates       int           // Maximum candidates receiving deep analysis (default: 100)
+	MaxPathsPerCandidate    int           // Maximum exploration paths per candidate (default: 500)
+	VerboseAnalysis         bool          // Display detailed candidate planning telemetry
 }
 
 // DefaultConfig returns default configuration settings.
@@ -94,26 +104,56 @@ func DefaultConfig() *Config {
 		provider = "heuristic"
 	}
 
+	analysisStrategy := os.Getenv("ANALYSIS_STRATEGY")
+	if analysisStrategy == "" {
+		analysisStrategy = "adaptive"
+	}
+
+	aiMode := os.Getenv("AI_MODE")
+	if aiMode == "" {
+		aiMode = "optional"
+	}
+
+	aiPlanner := false
+	if v := os.Getenv("AI_PLANNER"); v != "" {
+		aiPlanner = strings.EqualFold(v, "true") || v == "1"
+	}
+
+	aiClassifier := false
+	if v := os.Getenv("AI_CLASSIFIER"); v != "" {
+		aiClassifier = strings.EqualFold(v, "true") || v == "1"
+	}
+
 	return &Config{
-		TargetDir:          ".",
-		Format:             "text",
-		MinSeverity:        "low",
-		MinConfidence:      0.0,
-		FailOn:             "",
-		ExcludeDirs:        []string{"vendor", ".git", "node_modules", "testdata"},
-		NoColor:            false,
-		Verbose:            false,
-		ShowVersion:        false,
-		ClassifierProvider: provider,
-		ClassifierEndpoint: endpointEnv,
-		ClassifierModel:    modelEnv,
-		ClassifierAPIKey:   apiKeyEnv,
-		ClassifierTimeout:  5 * time.Second,
-		OpenRouterAPIKey:   openrouterKey,
-		OpenRouterModel:    openrouterModel,
-		OpenRouterBaseURL:  openrouterURL,
-		SystemOneModel:     systemOneModel,
-		KevEndpoint:        kevEndpoint,
+		TargetDir:               ".",
+		Format:                  "text",
+		MinSeverity:             "low",
+		MinConfidence:           0.0,
+		FailOn:                  "",
+		ExcludeDirs:             []string{"vendor", ".git", "node_modules", "testdata"},
+		NoColor:                 false,
+		Verbose:                 false,
+		ShowVersion:             false,
+		ClassifierProvider:      provider,
+		ClassifierEndpoint:      endpointEnv,
+		ClassifierModel:         modelEnv,
+		ClassifierAPIKey:        apiKeyEnv,
+		ClassifierTimeout:       5 * time.Second,
+		OpenRouterAPIKey:        openrouterKey,
+		OpenRouterModel:         openrouterModel,
+		OpenRouterBaseURL:       openrouterURL,
+		SystemOneModel:          systemOneModel,
+		KevEndpoint:             kevEndpoint,
+		AnalysisStrategy:        analysisStrategy,
+		AIPlannerEnabled:        aiPlanner,
+		AIClassifierEnabled:     aiClassifier,
+		AIMode:                  aiMode,
+		MaxDepth:                8,
+		MaxInterproceduralDepth: 5,
+		MaxCandidates:           1000,
+		MaxDeepCandidates:       100,
+		MaxPathsPerCandidate:    500,
+		VerboseAnalysis:         false,
 	}
 }
 
@@ -153,15 +193,31 @@ func ParseFlags(args []string, stderr io.Writer) (*Config, error) {
 	fs.StringVar(&cfg.OpenRouterModel, "openrouter-model", cfg.OpenRouterModel, "OpenRouter model identifier for vulnerability explanation LLM (default: openrouter/free)")
 	fs.StringVar(&cfg.KevEndpoint, "kev-url", cfg.KevEndpoint, "Local Kev service endpoint URL (default: http://localhost:8080/classify)")
 
+	// Adaptive analysis and AI planning options
+	fs.StringVar(&cfg.AnalysisStrategy, "analysis", cfg.AnalysisStrategy, "Analysis strategy: 'adaptive' or 'full' (default: adaptive)")
+	fs.BoolVar(&cfg.AIPlannerEnabled, "ai-planner", false, "Enable external AI planner for candidate triage")
+	fs.BoolVar(&cfg.AIClassifierEnabled, "ai-classifier", false, "Enable external AI finding classifier")
+	fs.StringVar(&cfg.AIMode, "ai-mode", cfg.AIMode, "AI mode: 'disabled', 'optional', or 'required' (default: optional)")
+	fs.BoolVar(&cfg.VerboseAnalysis, "verbose-analysis", false, "Display detailed analysis breakdown and telemetry")
+	fs.IntVar(&cfg.MaxDepth, "max-depth", cfg.MaxDepth, "Maximum data flow depth (default: 8)")
+	fs.IntVar(&cfg.MaxCandidates, "max-candidates", cfg.MaxCandidates, "Maximum security candidates to analyze (default: 1000)")
+	fs.IntVar(&cfg.MaxDeepCandidates, "max-deep-candidates", cfg.MaxDeepCandidates, "Maximum candidates to analyze with deep mode (default: 100)")
+
 	boolFlags := map[string]bool{
-		"no-color":    true,
-		"-no-color":   true,
-		"verbose":     true,
-		"-verbose":    true,
-		"version":     true,
-		"-version":    true,
-		"classifier":  true,
-		"-classifier": true,
+		"no-color":          true,
+		"-no-color":         true,
+		"verbose":           true,
+		"-verbose":          true,
+		"version":           true,
+		"-version":          true,
+		"classifier":        true,
+		"-classifier":       true,
+		"ai-planner":        true,
+		"-ai-planner":       true,
+		"ai-classifier":     true,
+		"-ai-classifier":    true,
+		"verbose-analysis":  true,
+		"-verbose-analysis": true,
 	}
 
 	var flagArgs []string
@@ -243,6 +299,24 @@ func ParseFlags(args []string, stderr io.Writer) (*Config, error) {
 
 	if cfg.MinConfidence < 0.0 || cfg.MinConfidence > 1.0 {
 		return nil, errors.New("confidence must be between 0.0 and 1.0")
+	}
+
+	cfg.AnalysisStrategy = strings.ToLower(cfg.AnalysisStrategy)
+	switch cfg.AnalysisStrategy {
+	case "adaptive", "full":
+	default:
+		return nil, fmt.Errorf("invalid analysis strategy %q: must be 'adaptive' or 'full'", cfg.AnalysisStrategy)
+	}
+
+	cfg.AIMode = strings.ToLower(cfg.AIMode)
+	switch cfg.AIMode {
+	case "disabled", "optional", "required":
+	default:
+		return nil, fmt.Errorf("invalid ai mode %q: must be 'disabled', 'optional', or 'required'", cfg.AIMode)
+	}
+
+	if cfg.AIClassifierEnabled {
+		cfg.ClassifierEnabled = true
 	}
 
 	// Verify target path exists (can be file or directory)

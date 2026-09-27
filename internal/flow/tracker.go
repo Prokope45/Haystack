@@ -17,13 +17,25 @@ type TaintNode struct {
 
 // FlowTracker maintains variable taint states within a procedural scope (e.g., function body).
 type FlowTracker struct {
-	taints map[string]*TaintNode
+	taints          map[string]*TaintNode
+	maxDepth        int
+	PathsConsidered int
+	PathsAnalyzed   int
 }
 
-// NewFlowTracker creates an initialized FlowTracker.
+// NewFlowTracker creates an initialized FlowTracker with unconstrained depth.
 func NewFlowTracker() *FlowTracker {
 	return &FlowTracker{
-		taints: make(map[string]*TaintNode),
+		taints:   make(map[string]*TaintNode),
+		maxDepth: 0,
+	}
+}
+
+// NewBoundedFlowTracker creates an initialized FlowTracker with a maximum propagation depth.
+func NewBoundedFlowTracker(maxDepth int) *FlowTracker {
+	return &FlowTracker{
+		taints:   make(map[string]*TaintNode),
+		maxDepth: maxDepth,
 	}
 }
 
@@ -42,8 +54,15 @@ func (ft *FlowTracker) IntroduceSource(varName string, src analyzer.Source) {
 
 // Propagate creates a new tainted variable derived from existing tainted variable(s).
 func (ft *FlowTracker) Propagate(targetVar string, fromVars []string, op analyzer.Operation) bool {
+	ft.PathsConsidered++
 	for _, v := range fromVars {
 		if node, exists := ft.taints[v]; exists {
+			// Enforce max propagation depth bound if configured
+			if ft.maxDepth > 0 && len(node.Operations) >= ft.maxDepth {
+				continue
+			}
+
+			ft.PathsAnalyzed++
 			newOps := make([]analyzer.Operation, len(node.Operations), len(node.Operations)+1)
 			copy(newOps, node.Operations)
 			newOps = append(newOps, op)

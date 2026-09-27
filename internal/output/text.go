@@ -11,11 +11,19 @@ import (
 
 // TextFormatter outputs human-readable scan reports to the terminal.
 type TextFormatter struct {
-	NoColor bool
+	NoColor         bool
+	VerboseAnalysis bool
 }
 
 func NewTextFormatter(noColor bool) *TextFormatter {
 	return &TextFormatter{NoColor: noColor}
+}
+
+func NewVerboseTextFormatter(noColor bool, verboseAnalysis bool) *TextFormatter {
+	return &TextFormatter{
+		NoColor:         noColor,
+		VerboseAnalysis: verboseAnalysis,
+	}
 }
 
 func (tf *TextFormatter) Format(w io.Writer, list []findings.Finding, summary ScanSummary) error {
@@ -52,6 +60,11 @@ func (tf *TextFormatter) Format(w io.Writer, list []findings.Finding, summary Sc
 				_, _ = fmt.Fprintf(&buf, "CWE:        %s\n", cweStr)
 			}
 			_, _ = fmt.Fprintf(&buf, "Confidence: %.0f%%\n", f.Confidence*100)
+
+			if f.AnalysisMetadata != nil && f.AnalysisMetadata.Strategy != "" {
+				_, _ = fmt.Fprintf(&buf, "Strategy:   %s (priority %d, depth %d, planner: %s)\n",
+					f.AnalysisMetadata.Strategy, f.AnalysisMetadata.Priority, f.AnalysisMetadata.Depth, f.AnalysisMetadata.PlannerProvider)
+			}
 
 			// Render Evidence Flow
 			if len(f.Evidence.FlowSteps) > 0 {
@@ -90,6 +103,21 @@ func (tf *TextFormatter) Format(w io.Writer, list []findings.Finding, summary Sc
 
 	_, _ = fmt.Fprintf(&buf, "\nFiles scanned: %d (Go: %d, Python: %d)\n", summary.FilesScanned, summary.GoFiles, summary.PythonFiles)
 	_, _ = fmt.Fprintf(&buf, "Findings:      %d\n", summary.FindingsCount)
+
+	if summary.Analysis.CandidatesDiscovered > 0 && tf.VerboseAnalysis {
+		_, _ = fmt.Fprintf(&buf, "\n%sAnalysis Telemetry:%s\n", bold, reset)
+		_, _ = fmt.Fprintf(&buf, "  Strategy:              %s\n", summary.Analysis.Strategy)
+		_, _ = fmt.Fprintf(&buf, "  Candidates Discovered: %d\n", summary.Analysis.CandidatesDiscovered)
+		_, _ = fmt.Fprintf(&buf, "  Candidates Analyzed:   %d\n", summary.Analysis.CandidatesAnalyzed)
+		_, _ = fmt.Fprintf(&buf, "  Candidates Skipped:    %d\n", summary.Analysis.CandidatesSkipped)
+		_, _ = fmt.Fprintf(&buf, "  Deep Analyses:         %d\n", summary.Analysis.DeepAnalyses)
+		_, _ = fmt.Fprintf(&buf, "  Medium Analyses:       %d\n", summary.Analysis.MediumAnalyses)
+		_, _ = fmt.Fprintf(&buf, "  Shallow Analyses:      %d\n", summary.Analysis.ShallowAnalyses)
+		if summary.Analysis.AIPlanningRequests > 0 {
+			_, _ = fmt.Fprintf(&buf, "  AI Planning Requests:  %d (Latency: %v)\n", summary.Analysis.AIPlanningRequests, summary.Analysis.AIPlanningLatency)
+		}
+	}
+
 	if summary.Duration > 0 {
 		_, _ = fmt.Fprintf(&buf, "Scan time:     %v\n\n", summary.Duration)
 	} else {

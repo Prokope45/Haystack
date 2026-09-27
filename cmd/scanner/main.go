@@ -63,6 +63,10 @@ func runScanCode(args []string) {
 	fs.StringVar(&cfg.SystemOneModel, "system-one-model", cfg.SystemOneModel, "Jev decision model identifier (default: ~typesafe/jev-latest)")
 	fs.StringVar(&cfg.OpenRouterModel, "openrouter-model", cfg.OpenRouterModel, "OpenRouter model identifier for vulnerability explanation LLM (default: openrouter/free)")
 	fs.StringVar(&cfg.KevEndpoint, "kev-url", cfg.KevEndpoint, "Local Kev service endpoint URL (default: http://localhost:8080/classify)")
+	fs.StringVar(&cfg.AnalysisStrategy, "analysis", cfg.AnalysisStrategy, "Analysis strategy: 'adaptive' or 'full'")
+	fs.BoolVar(&cfg.AIPlannerEnabled, "ai-planner", false, "Enable external AI planner for candidate triage")
+	fs.BoolVar(&cfg.AIClassifierEnabled, "ai-classifier", false, "Enable external AI finding classifier")
+	fs.BoolVar(&cfg.VerboseAnalysis, "verbose-analysis", false, "Display detailed analysis breakdown and telemetry")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
@@ -112,7 +116,7 @@ func runScanCode(args []string) {
 	case "sarif":
 		formatter = output.NewSARIFFormatter()
 	default:
-		formatter = output.NewTextFormatter(cfg.NoColor)
+		formatter = output.NewVerboseTextFormatter(cfg.NoColor, cfg.VerboseAnalysis)
 	}
 
 	if err := formatter.Format(os.Stdout, results, summary); err != nil {
@@ -169,7 +173,7 @@ func runScan(args []string) {
 	case "sarif":
 		formatter = output.NewSARIFFormatter()
 	default:
-		formatter = output.NewTextFormatter(cfg.NoColor)
+		formatter = output.NewVerboseTextFormatter(cfg.NoColor, cfg.VerboseAnalysis)
 	}
 
 	if err := formatter.Format(os.Stdout, results, summary); err != nil {

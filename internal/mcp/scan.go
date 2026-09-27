@@ -24,6 +24,12 @@ func (s *Server) callScan(id interface{}, ctx context.Context, args map[string]i
 	if conf, ok := args["min_confidence"].(float64); ok && conf > 0 {
 		req.MinConfidence = conf
 	}
+	if strat, ok := args["strategy"].(string); ok && strat != "" {
+		req.Strategy = strat
+	}
+	if aip, ok := args["ai_planner"].(bool); ok {
+		req.AIPlanner = aip
+	}
 
 	result, err := s.scannerSvc.Scan(ctx, req)
 	if err != nil {
@@ -60,6 +66,12 @@ func (s *Server) callScanDiff(id interface{}, ctx context.Context, args map[stri
 	if conf, ok := args["min_confidence"].(float64); ok && conf > 0 {
 		req.MinConfidence = conf
 	}
+	if strat, ok := args["strategy"].(string); ok && strat != "" {
+		req.Strategy = strat
+	}
+	if aip, ok := args["ai_planner"].(bool); ok {
+		req.AIPlanner = aip
+	}
 
 	result, err := s.scannerSvc.Scan(ctx, req)
 	if err != nil {
@@ -68,6 +80,63 @@ func (s *Server) callScanDiff(id interface{}, ctx context.Context, args map[stri
 
 	s.storeFindings(result.Findings)
 	return s.renderFindingsResult(id, result.Findings)
+}
+
+func (s *Server) callGetAnalysisPlan(id interface{}, ctx context.Context, args map[string]interface{}) *JSONRPCResponse {
+	path, _ := args["path"].(string)
+	if path == "" {
+		path = s.cfg.TargetDir
+	}
+
+	strategy, _ := args["strategy"].(string)
+	aiPlanner, _ := args["ai_planner"].(bool)
+
+	req := scanner.ScanRequest{
+		Paths:     []string{path},
+		Strategy:  strategy,
+		AIPlanner: aiPlanner,
+	}
+
+	plan, err := s.scannerSvc.GetAnalysisPlan(ctx, req)
+	if err != nil {
+		return s.toolError(id, fmt.Sprintf("GetAnalysisPlan error: %v", err))
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("### 📋 Adaptive Analysis Plan (Strategy: %s)\n\n", plan.Strategy))
+	sb.WriteString(fmt.Sprintf("Discovered %d security candidate flows.\n\n", len(plan.Candidates)))
+
+	for i, c := range plan.Candidates {
+		status := "🔍 ANALYZE"
+		if !c.Analyze {
+			status = "⏭️ SKIP"
+		}
+		sb.WriteString(fmt.Sprintf("%d. **[%s]** `%s` (Priority: %d, Mode: `%s`, Depth: %d)\n",
+			i+1, status, c.CandidateID, c.Priority, c.Mode, c.Depth))
+		if len(c.VulnerabilityClasses) > 0 {
+			sb.WriteString(fmt.Sprintf("   - Vulnerability Classes: %s\n", strings.Join(c.VulnerabilityClasses, ", ")))
+		}
+		sb.WriteString(fmt.Sprintf("   - Rationale: %s (Planner: %s)\n\n", c.Reason, c.PlannerProvider))
+	}
+
+	result := ToolCallResult{
+		Content: []ToolContentItem{
+			{
+				Type: "text",
+				Text: sb.String(),
+			},
+		},
+		IsError: false,
+		Meta: map[string]interface{}{
+			"plan": plan,
+		},
+	}
+
+	return &JSONRPCResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result:  result,
+	}
 }
 
 func (s *Server) callScanFile(id interface{}, ctx context.Context, args map[string]interface{}) *JSONRPCResponse {

@@ -18,10 +18,16 @@ import (
 var secretKeyRegex = regexp.MustCompile(`(?i)(api[_-]?key|secret[_-]?key|auth[_-]?token|passwd|password|private[_-]?key)`)
 
 // GoAnalyzer implements the analyzer.Analyzer interface for Go source files.
-type GoAnalyzer struct{}
+type GoAnalyzer struct {
+	directives map[string]analyzer.AnalysisDirectives
+}
 
 func NewGoAnalyzer() *GoAnalyzer {
 	return &GoAnalyzer{}
+}
+
+func (ga *GoAnalyzer) SetDirectives(directives map[string]analyzer.AnalysisDirectives) {
+	ga.directives = directives
 }
 
 func (ga *GoAnalyzer) Language() string {
@@ -40,6 +46,7 @@ func (ga *GoAnalyzer) Analyze(ctx context.Context, source []byte, filePath strin
 	}
 
 	var evidences []analyzer.Evidence
+	baseNameSanitized := sanitizeIdentifier(filepath.Base(filePath))
 
 	// Inspect each function declaration
 	for _, decl := range node.Decls {
@@ -48,7 +55,32 @@ func (ga *GoAnalyzer) Analyze(ctx context.Context, source []byte, filePath strin
 			continue
 		}
 
-		ft := flow.NewFlowTracker()
+		funcName := fn.Name.Name
+		maxDepth := 0
+		mode := "deep"
+		var matchedDirectives *analyzer.AnalysisDirectives
+
+		if len(ga.directives) > 0 {
+			// Find directive for this function
+			for key, d := range ga.directives {
+				if strings.Contains(key, baseNameSanitized) && strings.Contains(key, funcName) {
+					dCopy := d
+					matchedDirectives = &dCopy
+					break
+				}
+			}
+
+			if matchedDirectives != nil {
+				if !matchedDirectives.Analyze {
+					// Function's candidates were skipped by policy
+					continue
+				}
+				mode = matchedDirectives.Mode
+				maxDepth = matchedDirectives.MaxDepth
+			}
+		}
+
+		ft := flow.NewBoundedFlowTracker(maxDepth)
 
 		// Track function parameters if they are HTTP handlers or general inputs
 		if fn.Type.Params != nil {
@@ -69,6 +101,8 @@ func (ga *GoAnalyzer) Analyze(ctx context.Context, source []byte, filePath strin
 			}
 		}
 
+		var funcEvidences []analyzer.Evidence
+
 		// Walk through statements in the function body
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			if n == nil {
@@ -77,19 +111,37 @@ func (ga *GoAnalyzer) Analyze(ctx context.Context, source []byte, filePath strin
 
 			switch stmt := n.(type) {
 			case *ast.AssignStmt:
-				ga.handleAssignStmt(stmt, fset, ft, filePath, &evidences)
+				ga.handleAssignStmt(stmt, fset, ft, filePath, &funcEvidences)
 
 			case *ast.ExprStmt:
 				if call, ok := stmt.X.(*ast.CallExpr); ok {
-					ga.handleCallExpr(call, fset, ft, filePath, &evidences)
+					ga.handleCallExpr(call, fset, ft, filePath, &funcEvidences)
 				}
 			}
 
 			return true
 		})
+
+		for i := range funcEvidences {
+			if matchedDirectives != nil {
+				funcEvidences[i].CandidateID = matchedDirectives.CandidateID
+				funcEvidences[i].Mode = mode
+			} else {
+				funcEvidences[i].Mode = "deep"
+			}
+		}
+
+		evidences = append(evidences, funcEvidences...)
 	}
 
 	return evidences, nil
+}
+
+func sanitizeIdentifier(s string) string {
+	s = strings.ReplaceAll(s, ".", "_")
+	s = strings.ReplaceAll(s, "-", "_")
+	s = strings.ReplaceAll(s, "/", "_")
+	return s
 }
 
 func (ga *GoAnalyzer) handleAssignStmt(

@@ -63,3 +63,31 @@ func TestFlowTracker(t *testing.T) {
 		t.Errorf("expected 3 flow steps, got %d: %v", len(evidence.FlowSteps), evidence.FlowSteps)
 	}
 }
+
+func TestBoundedFlowTracker(t *testing.T) {
+	tracker := NewBoundedFlowTracker(1) // only 1 hop allowed
+
+	tracker.IntroduceSource("v0", analyzer.Source{
+		Type: analyzer.SourceHTTPInput,
+		Name: "input",
+	})
+
+	// 1st hop: allowed
+	ok := tracker.Propagate("v1", []string{"v0"}, analyzer.Operation{Type: "assignment"})
+	if !ok {
+		t.Fatalf("expected 1st hop to succeed")
+	}
+
+	// 2nd hop: exceeds maxDepth of 1
+	ok2 := tracker.Propagate("v2", []string{"v1"}, analyzer.Operation{Type: "assignment"})
+	if ok2 {
+		t.Fatalf("expected 2nd hop to be rejected by depth bound")
+	}
+
+	if tracker.PathsConsidered != 2 {
+		t.Errorf("expected 2 paths considered, got %d", tracker.PathsConsidered)
+	}
+	if tracker.PathsAnalyzed != 1 {
+		t.Errorf("expected 1 path analyzed, got %d", tracker.PathsAnalyzed)
+	}
+}
