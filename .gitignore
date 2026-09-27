@@ -1,0 +1,42 @@
+# Environment variables and secrets
+.env
+
+# Binaries and build artifacts
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/scanner
+
+# Test artifacts and coverage
+*.out
+*.test
+coverage.txt
+results.sarif
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# IDE and editors
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Opencode
+.opencode/
+agents/
