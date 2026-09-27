@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "haystack-scanner": {
+      "command": "scanner-mcp",
+      "args": [
+        "--allow-write",
+        "--issue-provider=github",
+        "--github-repo=${GITHUB_REPOSITORY}"
+      ],
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      }
+    }
+  }
+}

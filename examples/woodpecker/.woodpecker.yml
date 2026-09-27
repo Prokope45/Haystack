@@ -1,0 +1,16 @@
+steps:
+  security-scan:
+    image: golang:1.23
+    commands:
+      - go build -o /usr/local/bin/scanner ./cmd/scanner
+      - scanner . --format text --fail-on high
+    when:
+      event: [push, pull_request]
+
+  security-diff-scan:
+    image: golang:1.23
+    commands:
+      - go build -o /usr/local/bin/scanner ./cmd/scanner
+      - scanner . --diff ${CI_COMMIT_PREV_COMMIT}...${CI_COMMIT_SHA} --fail-on high
+    when:
+      event: [pull_request]

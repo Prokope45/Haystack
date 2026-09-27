@@ -1,0 +1,26 @@
+stages:
+  - security
+
+haystack-sast:
+  stage: security
+  image: golang:1.23
+  before_script:
+    - go build -o /usr/local/bin/scanner ./cmd/scanner
+  script:
+    - scanner . --format sarif --fail-on high > gl-sast-report.sarif
+  artifacts:
+    reports:
+      sast: gl-sast-report.sarif
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+haystack-diff-scan:
+  stage: security
+  image: golang:1.23
+  before_script:
+    - go build -o /usr/local/bin/scanner ./cmd/scanner
+  script:
+    - scanner . --diff origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...$CI_COMMIT_SHA --fail-on high
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
