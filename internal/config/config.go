@@ -38,8 +38,9 @@ type Config struct {
 	ClassifierAPIKey   string        // Optional auth token for remote model API
 	ClassifierTimeout  time.Duration // Timeout for classifier requests
 	OpenRouterAPIKey   string        // OpenRouter API key for Jev
-	OpenRouterModel    string        // OpenRouter model for Jev (default: openrouter/free)
+	OpenRouterModel    string        // OpenRouter model for explanation LLM (default: openrouter/free)
 	OpenRouterBaseURL  string        // OpenRouter API base URL
+	SystemOneModel     string        // Jev decision model (default: ~typesafe/jev-latest)
 	KevEndpoint        string        // Local Kev endpoint (default: http://localhost:8080/classify)
 }
 
@@ -75,6 +76,11 @@ func DefaultConfig() *Config {
 		openrouterURL = "https://openrouter.ai/api/v1"
 	}
 
+	systemOneModel := os.Getenv("SYSTEM_ONE_MODEL")
+	if systemOneModel == "" {
+		systemOneModel = "~typesafe/jev-latest"
+	}
+
 	kevEndpoint := os.Getenv("KEV_URL")
 	if kevEndpoint == "" {
 		kevEndpoint = os.Getenv("KEV_ENDPOINT")
@@ -106,6 +112,7 @@ func DefaultConfig() *Config {
 		OpenRouterAPIKey:   openrouterKey,
 		OpenRouterModel:    openrouterModel,
 		OpenRouterBaseURL:  openrouterURL,
+		SystemOneModel:     systemOneModel,
 		KevEndpoint:        kevEndpoint,
 	}
 }
@@ -142,7 +149,8 @@ func ParseFlags(args []string, stderr io.Writer) (*Config, error) {
 
 	// OpenRouter and Kev specific options
 	fs.StringVar(&cfg.OpenRouterAPIKey, "openrouter-api-key", cfg.OpenRouterAPIKey, "OpenRouter API Key for Jev classifier")
-	fs.StringVar(&cfg.OpenRouterModel, "openrouter-model", cfg.OpenRouterModel, "OpenRouter model identifier for Jev (default: openrouter/free)")
+	fs.StringVar(&cfg.SystemOneModel, "system-one-model", cfg.SystemOneModel, "Jev decision model identifier (default: ~typesafe/jev-latest)")
+	fs.StringVar(&cfg.OpenRouterModel, "openrouter-model", cfg.OpenRouterModel, "OpenRouter model identifier for vulnerability explanation LLM (default: openrouter/free)")
 	fs.StringVar(&cfg.KevEndpoint, "kev-url", cfg.KevEndpoint, "Local Kev service endpoint URL (default: http://localhost:8080/classify)")
 
 	boolFlags := map[string]bool{

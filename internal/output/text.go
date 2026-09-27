@@ -68,6 +68,14 @@ func (tf *TextFormatter) Format(w io.Writer, list []findings.Finding, summary Sc
 				_, _ = fmt.Fprintf(&buf, "\nCode:\n  %s%s%s\n", dim, f.Evidence.Code, reset)
 			}
 
+			if f.Classification != nil && f.Classification.Explanation != "" {
+				_, _ = fmt.Fprintf(&buf, "\nExplanation:\n")
+				explLines := strings.Split(f.Classification.Explanation, "\n")
+				for _, el := range explLines {
+					_, _ = fmt.Fprintf(&buf, "  %s\n", el)
+				}
+			}
+
 			if f.Remediation != "" {
 				_, _ = fmt.Fprintf(&buf, "\nRecommendation:\n")
 				remedLines := strings.Split(f.Remediation, "\n")

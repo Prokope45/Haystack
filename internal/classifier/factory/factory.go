@@ -26,20 +26,28 @@ func NewClassifier(cfg *config.Config) classifier.Classifier {
 		if endpoint == "" {
 			endpoint = cfg.OpenRouterBaseURL
 		}
-		model := cfg.ClassifierModel
-		if model == "" || model == "heuristic" {
-			model = cfg.OpenRouterModel
+		explainerModel := cfg.OpenRouterModel
+		if explainerModel == "" {
+			explainerModel = "openrouter/free"
+		}
+		if cfg.ClassifierModel != "" && cfg.ClassifierModel != "heuristic" && cfg.ClassifierModel != "jev" {
+			explainerModel = cfg.ClassifierModel
+		}
+		systemOneModel := cfg.SystemOneModel
+		if systemOneModel == "" {
+			systemOneModel = openrouter.SystemOneModel
 		}
 		apiKey := cfg.ClassifierAPIKey
 		if apiKey == "" {
 			apiKey = cfg.OpenRouterAPIKey
 		}
 		return openrouter.NewClient(openrouter.ClientOptions{
-			BaseURL:  endpoint,
-			Model:    model,
-			APIKey:   apiKey,
-			Timeout:  cfg.ClassifierTimeout,
-			Fallback: fallback,
+			BaseURL:        endpoint,
+			SystemOneModel: systemOneModel,
+			ExplainerModel: explainerModel,
+			APIKey:         apiKey,
+			Timeout:        cfg.ClassifierTimeout,
+			Fallback:       fallback,
 		})
 
 	case "kev":
@@ -76,16 +84,24 @@ func NewClassifier(cfg *config.Config) classifier.Classifier {
 			if endpoint == "" {
 				endpoint = cfg.OpenRouterBaseURL
 			}
-			model := cfg.ClassifierModel
-			if model == "" || model == "heuristic" {
-				model = cfg.OpenRouterModel
+			explainerModel := cfg.OpenRouterModel
+			if explainerModel == "" {
+				explainerModel = "openrouter/free"
+			}
+			if cfg.ClassifierModel != "" && cfg.ClassifierModel != "heuristic" && cfg.ClassifierModel != "jev" {
+				explainerModel = cfg.ClassifierModel
+			}
+			systemOneModel := cfg.SystemOneModel
+			if systemOneModel == "" {
+				systemOneModel = openrouter.SystemOneModel
 			}
 			return openrouter.NewClient(openrouter.ClientOptions{
-				BaseURL:  endpoint,
-				Model:    model,
-				APIKey:   cfg.OpenRouterAPIKey,
-				Timeout:  cfg.ClassifierTimeout,
-				Fallback: fallback,
+				BaseURL:        endpoint,
+				SystemOneModel: systemOneModel,
+				ExplainerModel: explainerModel,
+				APIKey:         cfg.OpenRouterAPIKey,
+				Timeout:        cfg.ClassifierTimeout,
+				Fallback:       fallback,
 			})
 		}
 

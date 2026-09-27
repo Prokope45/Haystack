@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -15,61 +16,119 @@ import (
 )
 
 const (
-	DefaultBaseURL = "https://openrouter.ai/api/v1"
-	DefaultModel   = "openrouter/free"
+	DefaultDecisionsURL   = "https://openrouter.ai/api/alpha/decisions"
+	DefaultChatURL        = "https://openrouter.ai/api/v1/chat/completions"
+	SystemOneModel        = "~typesafe/jev-latest"
+	DefaultExplainerModel = "openrouter/free"
 )
 
-// ClientOptions configures an OpenRouter inference client for Jev.
+// ClientOptions configures an OpenRouter inference client for Jev and LLM explanations.
 type ClientOptions struct {
-	BaseURL  string
-	APIKey   string
-	Model    string
-	Timeout  time.Duration
-	Fallback classifier.Classifier
+	BaseURL        string
+	DecisionsURL   string
+	ChatURL        string
+	APIKey         string
+	Model          string // Alias/fallback for ExplainerModel
+	SystemOneModel string // Jev decision model (default: ~typesafe/jev-latest)
+	ExplainerModel string // Explainer LLM model (default: openrouter/free)
+	Timeout        time.Duration
+	Fallback       classifier.Classifier
 }
 
-// Client connects to OpenRouter API to run Jev classifications.
+// Client executes candidate classification via Jev (/api/alpha/decisions)
+// and enriches vulnerable findings with contextual descriptions via standard LLM chat completions.
 type Client struct {
-	baseURL    string
-	apiKey     string
-	model      string
-	httpClient *http.Client
-	fallback   classifier.Classifier
+	decisionsURL   string
+	chatURL        string
+	apiKey         string
+	systemOneModel string
+	explainerModel string
+	httpClient     *http.Client
+	fallback       classifier.Classifier
 }
 
-// NewClient creates a new OpenRouter client for Jev.
+// NewClient creates a new client for Jev decisions and LLM explanations.
 func NewClient(opts ClientOptions) *Client {
-	baseURL := opts.BaseURL
-	if baseURL == "" {
-		baseURL = os.Getenv("OPENROUTER_BASE_URL")
-		if baseURL == "" {
-			baseURL = DefaultBaseURL
-		}
-	}
-	baseURL = strings.TrimRight(baseURL, "/")
-
 	apiKey := opts.APIKey
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENROUTER_API_KEY")
 	}
 
-	model := opts.Model
-	if model == "" {
-		model = os.Getenv("OPENROUTER_MODEL")
-		if model == "" {
-			model = DefaultModel
+	systemOneModel := opts.SystemOneModel
+	if systemOneModel == "" {
+		systemOneModel = os.Getenv("SYSTEM_ONE_MODEL")
+		if systemOneModel == "" {
+			systemOneModel = SystemOneModel
+		}
+	}
+
+	explainerModel := opts.ExplainerModel
+	if explainerModel == "" {
+		explainerModel = opts.Model
+		if explainerModel == "" {
+			explainerModel = os.Getenv("OPENROUTER_MODEL")
+			if explainerModel == "" {
+				explainerModel = DefaultExplainerModel
+			}
+		}
+	}
+
+	decisionsURL := opts.DecisionsURL
+	chatURL := opts.ChatURL
+
+	if decisionsURL == "" || chatURL == "" {
+		baseURL := opts.BaseURL
+		if baseURL == "" {
+			baseURL = os.Getenv("OPENROUTER_BASE_URL")
+		}
+
+		if baseURL != "" {
+			cleanBase := strings.TrimRight(baseURL, "/")
+			if decisionsURL == "" {
+				if strings.HasSuffix(cleanBase, "/v1") {
+					decBase := strings.TrimSuffix(cleanBase, "/v1")
+					decisionsURL = decBase + "/alpha/decisions"
+				} else if strings.HasSuffix(cleanBase, "/api") {
+					decisionsURL = cleanBase + "/alpha/decisions"
+				} else if strings.HasSuffix(cleanBase, "/alpha/decisions") {
+					decisionsURL = cleanBase
+				} else {
+					decisionsURL = cleanBase + "/api/alpha/decisions"
+				}
+			}
+
+			if chatURL == "" {
+				if strings.HasSuffix(cleanBase, "/chat/completions") {
+					chatURL = cleanBase
+				} else if strings.HasSuffix(cleanBase, "/v1") {
+					chatURL = cleanBase + "/chat/completions"
+				} else if strings.HasSuffix(cleanBase, "/api") {
+					chatURL = cleanBase + "/v1/chat/completions"
+				} else {
+					chatURL = cleanBase + "/api/v1/chat/completions"
+				}
+			}
+		} else {
+			if decisionsURL == "" {
+				decisionsURL = DefaultDecisionsURL
+			}
+			if chatURL == "" {
+				chatURL = DefaultChatURL
+			}
 		}
 	}
 
 	timeout := opts.Timeout
 	if timeout <= 0 {
-		timeout = 10 * time.Second
+		timeout = 30 * time.Second
 	}
 
 	return &Client{
-		baseURL: baseURL,
-		apiKey:  apiKey,
-		model:   model,
+		decisionsURL:   decisionsURL,
+		chatURL:        chatURL,
+		apiKey:         apiKey,
+		systemOneModel: systemOneModel,
+		explainerModel: explainerModel,
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
@@ -81,20 +140,48 @@ func (c *Client) ModelName() string {
 	return "jev"
 }
 
+// Jev Decision API Request and Response schema
+type jevDecisionRequest struct {
+	Model     string                 `json:"model"`
+	State     string                 `json:"state"`
+	Questions map[string]jevQuestion `json:"questions"`
+}
+
+type jevQuestion struct {
+	Type         string      `json:"type"`               // "noul", "choice", or "score"
+	Instructions string      `json:"instructions"`       // question prompt
+	Criteria     interface{} `json:"criteria,omitempty"` // map[string]string or []string
+}
+
+type jevDecisionResponse struct {
+	ID      string               `json:"id,omitempty"`
+	Model   string               `json:"model,omitempty"`
+	Answers map[string]jevAnswer `json:"answers"`
+	Error   *struct {
+		Message string `json:"message"`
+		Code    int    `json:"code"`
+	} `json:"error,omitempty"`
+}
+
+type jevAnswer struct {
+	Type          string             `json:"type,omitempty"`
+	Noul          *float64           `json:"noul,omitempty"`
+	Choice        string             `json:"choice,omitempty"`
+	Score         *float64           `json:"score,omitempty"`
+	Confidence    *float64           `json:"confidence,omitempty"`
+	Probabilities map[string]float64 `json:"probabilities,omitempty"`
+}
+
+// OpenRouter Chat Completion API Request and Response schema (for vulnerability description)
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-type responseFormat struct {
-	Type string `json:"type"`
-}
-
 type chatRequest struct {
-	Model          string          `json:"model"`
-	Messages       []chatMessage   `json:"messages"`
-	ResponseFormat *responseFormat `json:"response_format,omitempty"`
-	Temperature    float64         `json:"temperature"`
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	Temperature float64       `json:"temperature"`
 }
 
 type chatChoice struct {
@@ -111,16 +198,10 @@ type chatResponse struct {
 	} `json:"error,omitempty"`
 }
 
-type jevJSONOutput struct {
-	Label         string             `json:"label"`
-	Confidence    float64            `json:"confidence"`
-	Probabilities map[string]float64 `json:"probabilities"`
-	Explanation   string             `json:"explanation"`
-}
-
-// Classify sends candidate evidence to OpenRouter for Jev adjudication.
+// Classify executes the two-step triage workflow:
+// 1. Invokes Jev on OpenRouter's decisions endpoint (/api/alpha/decisions) to classify the candidate.
+// 2. If classified as a vulnerability, invokes a standard LLM (/api/v1/chat/completions) to explain what and why it is vulnerable.
 func (c *Client) Classify(ctx context.Context, input classifier.ClassificationInput) (classifier.ClassificationResult, error) {
-	// If no API key provided, fall back immediately if available
 	if c.apiKey == "" {
 		if c.fallback != nil {
 			return c.fallback.Classify(ctx, input)
@@ -128,49 +209,56 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 		return classifier.ClassificationResult{}, fmt.Errorf("no OPENROUTER_API_KEY configured and no fallback classifier available")
 	}
 
-	systemPrompt := "You are Jev, a specialized Static Application Security Testing (SAST) classifier. " +
-		"Analyze the provided static analysis evidence (source, sink, taint flow, code snippet) and classify whether " +
-		"it is a real vulnerability or safe/mitigated code. " +
-		"You must respond in valid JSON with fields: " +
-		"\"label\" (string, either the vulnerability category or 'safe_code'), " +
-		"\"confidence\" (number between 0.0 and 1.0), " +
-		"\"probabilities\" (object mapping labels to probabilities summing to 1.0), " +
-		"and \"explanation\" (concise string)."
-
-	var userPrompt strings.Builder
-	userPrompt.WriteString(fmt.Sprintf("Category: %s\n", input.Category))
-	if input.Question != "" {
-		userPrompt.WriteString(fmt.Sprintf("Question: %s\n", input.Question))
-	}
-	userPrompt.WriteString(fmt.Sprintf("File: %s:%d\n", input.Evidence.File, input.Evidence.Line))
-	userPrompt.WriteString(fmt.Sprintf("Source: %s (%s)\n", input.Evidence.Source.Name, input.Evidence.Source.Type))
-	userPrompt.WriteString(fmt.Sprintf("Sink: %s (%s)\n", input.Evidence.Sink.Name, input.Evidence.Sink.Type))
-	if len(input.Evidence.FlowSteps) > 0 {
-		userPrompt.WriteString(fmt.Sprintf("Taint Flow: %s\n", strings.Join(input.Evidence.FlowSteps, " -> ")))
-	}
-	if input.Evidence.Code != "" {
-		userPrompt.WriteString(fmt.Sprintf("Code Snippet:\n```\n%s\n```\n", input.Evidence.Code))
+	// -------------------------------------------------------------------------
+	// Step 1: Execute Jev Decision Classification
+	// -------------------------------------------------------------------------
+	targetCategory := input.Category
+	if targetCategory == "" {
+		targetCategory = "vulnerability"
 	}
 
-	chatReq := chatRequest{
-		Model: c.model,
-		Messages: []chatMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt.String()},
+	state := formatCandidateState(input)
+
+	categoryReadable := strings.ReplaceAll(targetCategory, "_", " ")
+	questions := map[string]jevQuestion{
+		"is_vulnerable": {
+			Type:         "noul",
+			Instructions: fmt.Sprintf("Does this code contain an exploitable %s vulnerability?", categoryReadable),
+			Criteria: map[string]string{
+				"true":  "Untrusted input reaches a sensitive sink without adequate sanitization or validation, creating an exploitable risk.",
+				"false": "The code is safe, properly sanitized, benign, or not exploitable.",
+			},
 		},
-		ResponseFormat: &responseFormat{Type: "json_object"},
-		Temperature:    0.1,
+		"classification": {
+			Type:         "choice",
+			Instructions: "Classify whether this code is a true positive vulnerability or safe/mitigated code.",
+			Criteria: map[string]string{
+				targetCategory: fmt.Sprintf("Exploitable %s vulnerability pattern.", targetCategory),
+				"safe_code":    "Safe, sanitized, mitigated, or false positive code pattern.",
+			},
+		},
 	}
 
-	reqBytes, err := json.Marshal(chatReq)
-	if err != nil {
-		return classifier.ClassificationResult{}, fmt.Errorf("failed to marshal openrouter request: %w", err)
+	jevReq := jevDecisionRequest{
+		Model:     c.systemOneModel,
+		State:     state,
+		Questions: questions,
 	}
 
-	endpoint := fmt.Sprintf("%s/chat/completions", c.baseURL)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBytes))
+	reqBytes, err := json.Marshal(jevReq)
 	if err != nil {
-		return classifier.ClassificationResult{}, fmt.Errorf("failed to create openrouter request: %w", err)
+		if c.fallback != nil {
+			return c.fallback.Classify(ctx, input)
+		}
+		return classifier.ClassificationResult{}, fmt.Errorf("failed to marshal jev request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.decisionsURL, bytes.NewReader(reqBytes))
+	if err != nil {
+		if c.fallback != nil {
+			return c.fallback.Classify(ctx, input)
+		}
+		return classifier.ClassificationResult{}, fmt.Errorf("failed to create jev decisions request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -183,7 +271,7 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 		if c.fallback != nil {
 			return c.fallback.Classify(ctx, input)
 		}
-		return classifier.ClassificationResult{}, fmt.Errorf("openrouter request failed: %w", err)
+		return classifier.ClassificationResult{}, fmt.Errorf("jev decisions request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -192,74 +280,197 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 		if c.fallback != nil {
 			return c.fallback.Classify(ctx, input)
 		}
-		return classifier.ClassificationResult{}, fmt.Errorf("openrouter returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+		return classifier.ClassificationResult{}, fmt.Errorf("jev decisions returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	var chatResp chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+	var jevResp jevDecisionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&jevResp); err != nil {
 		if c.fallback != nil {
 			return c.fallback.Classify(ctx, input)
 		}
-		return classifier.ClassificationResult{}, fmt.Errorf("failed to decode openrouter response: %w", err)
+		return classifier.ClassificationResult{}, fmt.Errorf("failed to decode jev decisions response: %w", err)
 	}
 
-	if len(chatResp.Choices) == 0 {
+	if jevResp.Error != nil {
 		if c.fallback != nil {
 			return c.fallback.Classify(ctx, input)
 		}
-		return classifier.ClassificationResult{}, fmt.Errorf("openrouter returned empty choices")
+		return classifier.ClassificationResult{}, fmt.Errorf("jev decision API error (%d): %s", jevResp.Error.Code, jevResp.Error.Message)
 	}
 
-	content := cleanJSONFence(chatResp.Choices[0].Message.Content)
+	// Extract Label, Confidence, and Probabilities from Jev response
+	var label string
+	var conf float64
+	var probs map[string]float64
 
-	var jevRes jevJSONOutput
-	if err := json.Unmarshal([]byte(content), &jevRes); err != nil {
-		if c.fallback != nil {
-			return c.fallback.Classify(ctx, input)
+	if ans, ok := jevResp.Answers["classification"]; ok {
+		label = ans.Choice
+		if ans.Probabilities != nil {
+			probs = ans.Probabilities
 		}
-		return classifier.ClassificationResult{}, fmt.Errorf("failed to parse jev json output: %w", err)
+		if ans.Confidence != nil && *ans.Confidence > 0 {
+			conf = *ans.Confidence
+		} else if probs != nil && label != "" {
+			conf = probs[label]
+		}
 	}
 
-	// Validate / normalize label
-	label := jevRes.Label
+	if isVulnAns, ok := jevResp.Answers["is_vulnerable"]; ok && isVulnAns.Noul != nil {
+		noulVal := *isVulnAns.Noul
+		if label == "" {
+			if noulVal >= 0.5 {
+				label = targetCategory
+				conf = noulVal
+			} else {
+				label = "safe_code"
+				conf = 1.0 - noulVal
+			}
+		} else if conf == 0 {
+			if label == "safe_code" {
+				conf = 1.0 - noulVal
+			} else {
+				conf = noulVal
+			}
+		}
+	}
+
 	if label == "" {
-		label = input.Category
+		label = targetCategory
 	}
 
-	conf := jevRes.Confidence
 	if conf <= 0 {
 		conf = 0.90
 	} else if conf > 1.0 {
 		conf = 1.0
 	}
 
-	probs := jevRes.Probabilities
 	if probs == nil {
 		probs = map[string]float64{
 			label: conf,
 		}
 		if label != "safe_code" {
-			probs["safe_code"] = 1.0 - conf
+			probs["safe_code"] = math.Max(0, 1.0-conf)
 		}
 	}
+
+	// If classified as safe_code, skip LLM explanation and return immediately
+	if label == "safe_code" {
+		return classifier.ClassificationResult{
+			Model:         "jev",
+			Label:         "safe_code",
+			Confidence:    conf,
+			Probabilities: probs,
+			Explanation:   "Candidate analyzed and classified as safe/mitigated code by Jev decision model.",
+		}, nil
+	}
+
+	// -------------------------------------------------------------------------
+	// Step 2: Use LLM to describe what the vulnerability is and why it's a vulnerability
+	// -------------------------------------------------------------------------
+	explanation := c.explainVulnerability(ctx, input, label, conf)
 
 	return classifier.ClassificationResult{
 		Model:         "jev",
 		Label:         label,
 		Confidence:    conf,
 		Probabilities: probs,
-		Explanation:   jevRes.Explanation,
+		Explanation:   explanation,
 	}, nil
 }
 
-func cleanJSONFence(s string) string {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```json") {
-		s = strings.TrimPrefix(s, "```json")
-		s = strings.TrimSuffix(s, "```")
-	} else if strings.HasPrefix(s, "```") {
-		s = strings.TrimPrefix(s, "```")
-		s = strings.TrimSuffix(s, "```")
+// explainVulnerability queries an OpenRouter LLM to explain the vulnerability context.
+func (c *Client) explainVulnerability(ctx context.Context, input classifier.ClassificationInput, label string, conf float64) string {
+	systemPrompt := "You are a specialized application security expert. " +
+		"Provide a concise, direct description of the identified vulnerability in the provided code snippet. " +
+		"Explain what the vulnerability is and why it is a vulnerability in this specific code context. " +
+		"Keep the explanation clear, professional, and within 2 to 4 sentences. " +
+		"Do not wrap in markdown quotes or conversational filler; output the description directly."
+
+	var userPrompt strings.Builder
+	userPrompt.WriteString(fmt.Sprintf("Vulnerability Category: %s\n", label))
+	userPrompt.WriteString(fmt.Sprintf("Location: %s:%d\n", input.Evidence.File, input.Evidence.Line))
+	if input.Evidence.Source.Name != "" {
+		userPrompt.WriteString(fmt.Sprintf("Untrusted Source: %s (%s)\n", input.Evidence.Source.Name, input.Evidence.Source.Type))
 	}
-	return strings.TrimSpace(s)
+	if input.Evidence.Sink.Name != "" {
+		userPrompt.WriteString(fmt.Sprintf("Dangerous Sink: %s (%s)\n", input.Evidence.Sink.Name, input.Evidence.Sink.Type))
+	}
+	if len(input.Evidence.FlowSteps) > 0 {
+		userPrompt.WriteString(fmt.Sprintf("Taint Propagation: %s\n", strings.Join(input.Evidence.FlowSteps, " -> ")))
+	}
+	if input.Evidence.Code != "" {
+		userPrompt.WriteString(fmt.Sprintf("Code Snippet:\n```\n%s\n```\n", input.Evidence.Code))
+	}
+	userPrompt.WriteString(fmt.Sprintf("Jev Decision Verdict: %s (Confidence: %.0f%%)\n\n", label, conf*100))
+	userPrompt.WriteString("Explain what this vulnerability is and why this code is vulnerable.")
+
+	chatReq := chatRequest{
+		Model: c.explainerModel,
+		Messages: []chatMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt.String()},
+		},
+		Temperature: 0.2,
+	}
+
+	reqBytes, err := json.Marshal(chatReq)
+	if err != nil {
+		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatURL, bytes.NewReader(reqBytes))
+	if err != nil {
+		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/haystack-security/haystack")
+	httpReq.Header.Set("X-Title", "Haystack Security Scanner")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+	}
+
+	var chatResp chatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil || len(chatResp.Choices) == 0 {
+		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+	}
+
+	explanation := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	if explanation == "" {
+		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+	}
+
+	return explanation
+}
+
+func formatCandidateState(input classifier.ClassificationInput) string {
+	var sb strings.Builder
+	if input.Category != "" {
+		sb.WriteString(fmt.Sprintf("Category: %s\n", input.Category))
+	}
+	if input.Question != "" {
+		sb.WriteString(fmt.Sprintf("Question: %s\n", input.Question))
+	}
+	sb.WriteString(fmt.Sprintf("File: %s:%d\n", input.Evidence.File, input.Evidence.Line))
+	if input.Evidence.Source.Name != "" {
+		sb.WriteString(fmt.Sprintf("Source: %s (%s)\n", input.Evidence.Source.Name, input.Evidence.Source.Type))
+	}
+	if input.Evidence.Sink.Name != "" {
+		sb.WriteString(fmt.Sprintf("Sink: %s (%s)\n", input.Evidence.Sink.Name, input.Evidence.Sink.Type))
+	}
+	if len(input.Evidence.FlowSteps) > 0 {
+		sb.WriteString(fmt.Sprintf("Taint Flow: %s\n", strings.Join(input.Evidence.FlowSteps, " -> ")))
+	}
+	if input.Evidence.Code != "" {
+		sb.WriteString(fmt.Sprintf("Code Snippet:\n%s\n", input.Evidence.Code))
+	}
+	return sb.String()
 }

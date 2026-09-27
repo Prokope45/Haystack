@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,48 +17,95 @@ import (
 // code, detects vulnerability candidates, and calls the Jev endpoint to classify findings.
 func TestSASTWithMockJevEndpoint(t *testing.T) {
 	var jevCalled bool
+	var explainerCalled bool
 	var receivedPrompt string
 
-	// Mock Jev HTTP endpoint
+	// Mock Jev decisions and LLM explanation HTTP endpoints
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		jevCalled = true
-
 		if r.Header.Get("Authorization") != "Bearer test-api-key" {
 			t.Errorf("expected Bearer test-api-key, got %s", r.Header.Get("Authorization"))
 		}
 
-		var chatReq struct {
-			Model    string `json:"model"`
-			Messages []struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			} `json:"messages"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&chatReq); err != nil {
-			t.Fatalf("failed to decode request body: %v", err)
-		}
+		w.Header().Set("Content-Type", "application/json")
 
-		for _, m := range chatReq.Messages {
-			if m.Role == "user" {
-				receivedPrompt = m.Content
+		// Route 1: Jev Decisions endpoint
+		if strings.Contains(r.URL.Path, "decisions") {
+			jevCalled = true
+
+			var decReq struct {
+				Model     string                 `json:"model"`
+				State     string                 `json:"state"`
+				Questions map[string]interface{} `json:"questions"`
 			}
-		}
+			if err := json.NewDecoder(r.Body).Decode(&decReq); err != nil {
+				t.Fatalf("failed to decode decisions request body: %v", err)
+			}
 
-		jevResponse := map[string]interface{}{
-			"id":    "gen-mock-123",
-			"model": "jev",
-			"choices": []map[string]interface{}{
-				{
-					"message": map[string]interface{}{
-						"role":    "assistant",
-						"content": `{"label": "command_injection", "confidence": 0.98, "probabilities": {"command_injection": 0.98, "safe_code": 0.02}, "explanation": "Unsanitized user input flows into exec.Command."}`,
+			if !strings.Contains(decReq.State, "exec.Command") {
+				t.Errorf("expected state to contain exec.Command, got %s", decReq.State)
+			}
+
+			jevResponse := map[string]interface{}{
+				"id":    "gen-mock-jev-123",
+				"model": "~typesafe/jev-latest",
+				"answers": map[string]interface{}{
+					"is_vulnerable": map[string]interface{}{
+						"type": "noul",
+						"noul": 0.98,
+					},
+					"classification": map[string]interface{}{
+						"type":       "choice",
+						"choice":     "command_injection",
+						"confidence": 0.98,
+						"probabilities": map[string]interface{}{
+							"command_injection": 0.98,
+							"safe_code":         0.02,
+						},
 					},
 				},
-			},
+			}
+			_ = json.NewEncoder(w).Encode(jevResponse)
+			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(jevResponse)
+		// Route 2: Normal LLM Chat Completions endpoint (vulnerability explainer)
+		if strings.Contains(r.URL.Path, "chat/completions") {
+			explainerCalled = true
+
+			var chatReq struct {
+				Model    string `json:"model"`
+				Messages []struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"messages"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&chatReq); err != nil {
+				t.Fatalf("failed to decode chat request body: %v", err)
+			}
+
+			for _, m := range chatReq.Messages {
+				if m.Role == "user" {
+					receivedPrompt = m.Content
+				}
+			}
+
+			llmResponse := map[string]interface{}{
+				"id":    "gen-mock-llm-456",
+				"model": "openrouter/free",
+				"choices": []map[string]interface{}{
+					{
+						"message": map[string]interface{}{
+							"role":    "assistant",
+							"content": "Unsanitized user input flows into exec.Command, allowing arbitrary shell command execution.",
+						},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(llmResponse)
+			return
+		}
+
+		http.NotFound(w, r)
 	}))
 	defer ts.Close()
 
@@ -95,11 +143,15 @@ func vulnHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !jevCalled {
-		t.Fatal("expected Jev endpoint to be called during scan, but it was not")
+		t.Fatal("expected Jev decisions endpoint to be called during scan, but it was not")
+	}
+
+	if !explainerCalled {
+		t.Fatal("expected LLM explainer endpoint to be called during scan, but it was not")
 	}
 
 	if receivedPrompt == "" {
-		t.Error("expected non-empty prompt sent to Jev endpoint")
+		t.Error("expected non-empty prompt sent to LLM explainer endpoint")
 	}
 
 	if summary.FindingsCount != 1 || len(findings) != 1 {

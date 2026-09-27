@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +14,10 @@ import (
 	"haystack/internal/classifier/kev"
 )
 
-func TestOpenRouterClientSuccess(t *testing.T) {
+func TestOpenRouterClientTwoStepPipeline(t *testing.T) {
+	var jevCalled bool
+	var explainerCalled bool
+
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-openrouter-key" {
 			t.Errorf("expected Authorization header Bearer test-openrouter-key, got %s", r.Header.Get("Authorization"))
@@ -22,40 +26,83 @@ func TestOpenRouterClientSuccess(t *testing.T) {
 			t.Errorf("expected Content-Type application/json, got %s", r.Header.Get("Content-Type"))
 		}
 
-		var req chatRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("failed to decode request body: %v", err)
-		}
+		if strings.Contains(r.URL.Path, "decisions") {
+			jevCalled = true
+			var decReq jevDecisionRequest
+			if err := json.NewDecoder(r.Body).Decode(&decReq); err != nil {
+				t.Fatalf("failed to decode decisions request: %v", err)
+			}
 
-		if req.Model != "openrouter/free" {
-			t.Errorf("expected model openrouter/free, got %s", req.Model)
-		}
+			if decReq.Model != SystemOneModel {
+				t.Errorf("expected model %s, got %s", SystemOneModel, decReq.Model)
+			}
+			if !strings.Contains(decReq.State, "exec.Command") {
+				t.Errorf("expected state to contain code snippet, got: %s", decReq.State)
+			}
 
-		jevJSON := `{"label": "command_injection", "confidence": 0.96, "probabilities": {"command_injection": 0.96, "safe_code": 0.04}, "explanation": "Direct shell execution with tainted parameter."}`
-
-		resp := chatResponse{
-			ID:    "gen-12345",
-			Model: "openrouter/free",
-			Choices: []chatChoice{
-				{
-					Message: chatMessage{
-						Role:    "assistant",
-						Content: jevJSON,
+			noulVal := 0.96
+			confVal := 0.96
+			decResp := jevDecisionResponse{
+				ID:    "gen-dec-12345",
+				Model: SystemOneModel,
+				Answers: map[string]jevAnswer{
+					"is_vulnerable": {
+						Type: "noul",
+						Noul: &noulVal,
+					},
+					"classification": {
+						Type:       "choice",
+						Choice:     "command_injection",
+						Confidence: &confVal,
+						Probabilities: map[string]float64{
+							"command_injection": 0.96,
+							"safe_code":         0.04,
+						},
 					},
 				},
-			},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(decResp)
+			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		if strings.Contains(r.URL.Path, "chat/completions") {
+			explainerCalled = true
+			var chatReq chatRequest
+			if err := json.NewDecoder(r.Body).Decode(&chatReq); err != nil {
+				t.Fatalf("failed to decode chat request: %v", err)
+			}
+
+			if chatReq.Model != "openrouter/free" {
+				t.Errorf("expected explainer model openrouter/free, got %s", chatReq.Model)
+			}
+
+			chatResp := chatResponse{
+				ID:    "gen-chat-67890",
+				Model: "openrouter/free",
+				Choices: []chatChoice{
+					{
+						Message: chatMessage{
+							Role:    "assistant",
+							Content: "Unsanitized user input flows from HTTP query into exec.Command, allowing arbitrary shell command injection.",
+						},
+					},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(chatResp)
+			return
+		}
+
+		http.NotFound(w, r)
 	}))
 	defer ts.Close()
 
 	client := NewClient(ClientOptions{
-		BaseURL: ts.URL,
-		APIKey:  "test-openrouter-key",
-		Model:   "openrouter/free",
-		Timeout: 2 * time.Second,
+		BaseURL:        ts.URL,
+		APIKey:         "test-openrouter-key",
+		ExplainerModel: "openrouter/free",
+		Timeout:        2 * time.Second,
 	})
 
 	ctx := context.Background()
@@ -82,6 +129,13 @@ func TestOpenRouterClientSuccess(t *testing.T) {
 		t.Fatalf("unexpected classify error: %v", err)
 	}
 
+	if !jevCalled {
+		t.Error("expected Jev decisions endpoint to be invoked")
+	}
+	if !explainerCalled {
+		t.Error("expected LLM explainer endpoint to be invoked")
+	}
+
 	if res.Model != "jev" {
 		t.Errorf("expected model jev, got %s", res.Model)
 	}
@@ -91,35 +145,59 @@ func TestOpenRouterClientSuccess(t *testing.T) {
 	if res.Confidence != 0.96 {
 		t.Errorf("expected confidence 0.96, got %f", res.Confidence)
 	}
+	if !strings.Contains(res.Explanation, "Unsanitized user input") {
+		t.Errorf("expected LLM explanation, got: %s", res.Explanation)
+	}
 }
 
-func TestOpenRouterClientMarkdownJSON(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		jevJSON := "```json\n{\"label\": \"safe_code\", \"confidence\": 0.98, \"probabilities\": {\"safe_code\": 0.98}, \"explanation\": \"Input sanitized via strconv.Atoi.\"}\n```"
+func TestOpenRouterClientSafeCodeSkipsExplanation(t *testing.T) {
+	var chatCalled bool
 
-		resp := chatResponse{
-			ID:    "gen-67890",
-			Model: "openrouter/free",
-			Choices: []chatChoice{
-				{
-					Message: chatMessage{
-						Role:    "assistant",
-						Content: jevJSON,
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "decisions") {
+			noulVal := 0.05
+			confVal := 0.95
+			decResp := jevDecisionResponse{
+				ID:    "gen-dec-safe",
+				Model: SystemOneModel,
+				Answers: map[string]jevAnswer{
+					"is_vulnerable": {
+						Type: "noul",
+						Noul: &noulVal,
+					},
+					"classification": {
+						Type:       "choice",
+						Choice:     "safe_code",
+						Confidence: &confVal,
+						Probabilities: map[string]float64{
+							"command_injection": 0.05,
+							"safe_code":         0.95,
+						},
 					},
 				},
-			},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(decResp)
+			return
 		}
-		_ = json.NewEncoder(w).Encode(resp)
+
+		if strings.Contains(r.URL.Path, "chat/completions") {
+			chatCalled = true
+		}
 	}))
 	defer ts.Close()
 
 	client := NewClient(ClientOptions{
 		BaseURL: ts.URL,
 		APIKey:  "test-key",
-		Model:   "openrouter/free",
 	})
 
-	res, err := client.Classify(context.Background(), classifier.ClassificationInput{Category: "sql_injection"})
+	res, err := client.Classify(context.Background(), classifier.ClassificationInput{
+		Category: "command_injection",
+		Evidence: analyzer.Evidence{
+			Code: "strconv.Atoi(input)",
+		},
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -127,11 +205,63 @@ func TestOpenRouterClientMarkdownJSON(t *testing.T) {
 	if res.Label != "safe_code" {
 		t.Errorf("expected label safe_code, got %s", res.Label)
 	}
+	if chatCalled {
+		t.Error("expected LLM explainer call to be skipped when code is classified as safe_code")
+	}
+}
+
+func TestOpenRouterClientExplainerErrorResilience(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "decisions") {
+			noulVal := 0.95
+			decResp := jevDecisionResponse{
+				Answers: map[string]jevAnswer{
+					"classification": {
+						Choice: "sql_injection",
+						Probabilities: map[string]float64{
+							"sql_injection": 0.95,
+							"safe_code":     0.05,
+						},
+					},
+					"is_vulnerable": {
+						Noul: &noulVal,
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(decResp)
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "chat/completions") {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	client := NewClient(ClientOptions{
+		BaseURL: ts.URL,
+		APIKey:  "test-key",
+	})
+
+	res, err := client.Classify(context.Background(), classifier.ClassificationInput{
+		Category: "sql_injection",
+	})
+	if err != nil {
+		t.Fatalf("expected classification to succeed even if LLM explainer encounters an error, got: %v", err)
+	}
+
+	if res.Label != "sql_injection" {
+		t.Errorf("expected sql_injection, got %s", res.Label)
+	}
+	if res.Explanation == "" {
+		t.Error("expected fallback explanation when explainer fails")
+	}
 }
 
 func TestOpenRouterClientFallbackOnError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 	}))
 	defer ts.Close()
 
