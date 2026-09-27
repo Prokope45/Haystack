@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -33,6 +34,7 @@ type ClientOptions struct {
 	ExplainerModel string // Explainer LLM model (default: openrouter/free)
 	Timeout        time.Duration
 	Fallback       classifier.Classifier
+	Logger         *slog.Logger
 }
 
 // Client executes candidate classification via Jev (/api/alpha/decisions)
@@ -45,6 +47,7 @@ type Client struct {
 	explainerModel string
 	httpClient     *http.Client
 	fallback       classifier.Classifier
+	logger         *slog.Logger
 }
 
 // NewClient creates a new client for Jev decisions and LLM explanations.
@@ -122,6 +125,10 @@ func NewClient(opts ClientOptions) *Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 
 	return &Client{
 		decisionsURL:   decisionsURL,
@@ -133,6 +140,7 @@ func NewClient(opts ClientOptions) *Client {
 			Timeout: timeout,
 		},
 		fallback: opts.Fallback,
+		logger:   logger,
 	}
 }
 
@@ -367,7 +375,17 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 	// -------------------------------------------------------------------------
 	// Step 2: Use LLM to describe what the vulnerability is and why it's a vulnerability
 	// -------------------------------------------------------------------------
-	explanation := c.explainVulnerability(ctx, input, label, conf)
+	explanation, explainErr := c.explainVulnerability(ctx, input, label, conf)
+	if explainErr != nil {
+		c.logger.Warn("OpenRouter vulnerability explanation unavailable; using CWE description in reports",
+			"stage", "explanation",
+			"model", c.explainerModel,
+			"category", label,
+			"file", input.Evidence.File,
+			"line", input.Evidence.Line,
+			"error", explainErr,
+		)
+	}
 
 	return classifier.ClassificationResult{
 		Model:         "jev",
@@ -379,7 +397,7 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 }
 
 // explainVulnerability queries an OpenRouter LLM to explain the vulnerability context.
-func (c *Client) explainVulnerability(ctx context.Context, input classifier.ClassificationInput, label string, conf float64) string {
+func (c *Client) explainVulnerability(ctx context.Context, input classifier.ClassificationInput, label string, conf float64) (string, error) {
 	systemPrompt := "You are a specialized application security expert. " +
 		"Provide a concise, direct description of the identified vulnerability in the provided code snippet. " +
 		"Explain what the vulnerability is and why it is a vulnerability in this specific code context. " +
@@ -415,12 +433,12 @@ func (c *Client) explainVulnerability(ctx context.Context, input classifier.Clas
 
 	reqBytes, err := json.Marshal(chatReq)
 	if err != nil {
-		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+		return "", fmt.Errorf("marshal explainer request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatURL, bytes.NewReader(reqBytes))
 	if err != nil {
-		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+		return "", fmt.Errorf("create explainer request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -430,25 +448,31 @@ func (c *Client) explainVulnerability(ctx context.Context, input classifier.Clas
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+		return "", fmt.Errorf("send explainer request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+		return "", fmt.Errorf("explainer returned HTTP %d", resp.StatusCode)
 	}
 
 	var chatResp chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil || len(chatResp.Choices) == 0 {
-		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+		return "", fmt.Errorf("decode explainer response: %w", err)
+	}
+	if chatResp.Error != nil {
+		return "", fmt.Errorf("explainer API error (%d): %s", chatResp.Error.Code, chatResp.Error.Message)
+	}
+	if len(chatResp.Choices) == 0 {
+		return "", fmt.Errorf("explainer response contained no choices")
 	}
 
 	explanation := strings.TrimSpace(chatResp.Choices[0].Message.Content)
 	if explanation == "" {
-		return fmt.Sprintf("Vulnerability classified by Jev decision model as %s (confidence %.2f).", label, conf)
+		return "", fmt.Errorf("explainer response contained an empty explanation")
 	}
 
-	return explanation
+	return explanation, nil
 }
 
 func formatCandidateState(input classifier.ClassificationInput) string {

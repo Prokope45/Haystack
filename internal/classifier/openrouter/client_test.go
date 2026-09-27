@@ -1,8 +1,10 @@
 package openrouter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -211,6 +213,7 @@ func TestOpenRouterClientSafeCodeSkipsExplanation(t *testing.T) {
 }
 
 func TestOpenRouterClientExplainerErrorResilience(t *testing.T) {
+	var logOutput bytes.Buffer
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "decisions") {
 			noulVal := 0.95
@@ -242,6 +245,7 @@ func TestOpenRouterClientExplainerErrorResilience(t *testing.T) {
 	client := NewClient(ClientOptions{
 		BaseURL: ts.URL,
 		APIKey:  "test-key",
+		Logger:  slog.New(slog.NewTextHandler(&logOutput, nil)),
 	})
 
 	res, err := client.Classify(context.Background(), classifier.ClassificationInput{
@@ -254,8 +258,14 @@ func TestOpenRouterClientExplainerErrorResilience(t *testing.T) {
 	if res.Label != "sql_injection" {
 		t.Errorf("expected sql_injection, got %s", res.Label)
 	}
-	if res.Explanation == "" {
-		t.Error("expected fallback explanation when explainer fails")
+	if res.Explanation != "" {
+		t.Errorf("expected no generated explanation when explainer fails, got: %s", res.Explanation)
+	}
+	if strings.Contains(res.Explanation, "Vulnerability classified by Jev decision model") {
+		t.Errorf("expected the old generic classifier fallback to be absent, got: %s", res.Explanation)
+	}
+	if !strings.Contains(logOutput.String(), "HTTP 429") {
+		t.Errorf("expected the explainer HTTP failure to be logged, got: %s", logOutput.String())
 	}
 }
 

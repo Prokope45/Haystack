@@ -40,8 +40,12 @@ func RunCLI(cmdName string, args []string) error {
 	fs.StringVar(&cfg.SystemOneModel, "system-one-model", cfg.SystemOneModel, "Jev decision model identifier (default: ~typesafe/jev-latest)")
 	fs.StringVar(&cfg.OpenRouterModel, "openrouter-model", cfg.OpenRouterModel, "OpenRouter model identifier for vulnerability explanation LLM (default: openrouter/free)")
 	fs.StringVar(&cfg.KevEndpoint, "kev-url", cfg.KevEndpoint, "Local Kev service endpoint URL (default: http://localhost:8080/classify)")
+	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Logging verbosity: debug, info, warn, or error")
 
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if _, err := config.ParseLogLevel(cfg.LogLevel); err != nil {
 		return err
 	}
 

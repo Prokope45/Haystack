@@ -120,6 +120,7 @@ All settings can be configured via CLI flags or `.env` file (see [`.env.example`
 | `--classifier-model` | `RLCD_MODEL` or `KEV_MODEL` | `heuristic` | Model identifier |
 | `--classifier-api-key` | `RLCD_API_KEY` or `KEV_API_KEY` | `""` | API key / Bearer token |
 | `--classifier-timeout` | | `5s` | Classifier request timeout in seconds |
+| `--log-level` | `HAYSTACK_LOG_LEVEL` | `warn` | Diagnostic logging verbosity: `debug`, `info`, `warn`, or `error` (logs go to stderr) |
 | `--openrouter-api-key` | `OPENROUTER_API_KEY` | `""` | OpenRouter API Key for Jev / System-One |
 | `--system-one-model` | `SYSTEM_ONE_MODEL` | `~typesafe/jev-latest` | Jev decision model for decisions API |
 | `--openrouter-model` | `OPENROUTER_MODEL` | `openrouter/free` | LLM model for vulnerability explanations |

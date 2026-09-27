@@ -53,6 +53,7 @@ func runScanCode(args []string) {
 	fs.StringVar(&cfg.MinSeverity, "severity", "low", "Minimum severity: low, medium, high, critical")
 	fs.Float64Var(&cfg.MinConfidence, "confidence", 0.0, "Minimum confidence threshold (0.0 - 1.0)")
 	fs.StringVar(&cfg.FailOn, "fail-on", "low", "Exit with code 1 if findings reach severity")
+	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Logging verbosity: debug, info, warn, or error")
 	fs.BoolVar(&cfg.NoColor, "no-color", false, "Disable colored terminal output")
 	fs.StringVar(&cfg.ClassifierProvider, "classifier-provider", cfg.ClassifierProvider, "Classifier provider: kev, jev, openrouter, heuristic")
 	fs.StringVar(&cfg.ClassifierEndpoint, "classifier-endpoint", cfg.ClassifierEndpoint, "Classifier endpoint URL")
@@ -69,6 +70,10 @@ func runScanCode(args []string) {
 	fs.BoolVar(&cfg.VerboseAnalysis, "verbose-analysis", false, "Display detailed analysis breakdown and telemetry")
 
 	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+		os.Exit(config.ExitConfigError)
+	}
+	if _, err := config.ParseLogLevel(cfg.LogLevel); err != nil {
 		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
 		os.Exit(config.ExitConfigError)
 	}

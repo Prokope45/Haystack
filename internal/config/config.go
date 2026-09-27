@@ -29,6 +29,7 @@ type Config struct {
 	ExcludeDirs             []string
 	NoColor                 bool
 	Verbose                 bool
+	LogLevel                string // debug, info, warn, error
 	ShowVersion             bool
 	DiffRange               string        // Git diff range (e.g. HEAD~1, main...HEAD)
 	ClassifierEnabled       bool          // Whether classifier is explicitly enabled
@@ -104,6 +105,11 @@ func DefaultConfig() *Config {
 		provider = "heuristic"
 	}
 
+	logLevel := strings.ToLower(strings.TrimSpace(os.Getenv("HAYSTACK_LOG_LEVEL")))
+	if logLevel == "" {
+		logLevel = DefaultLogLevel
+	}
+
 	analysisStrategy := os.Getenv("ANALYSIS_STRATEGY")
 	if analysisStrategy == "" {
 		analysisStrategy = "adaptive"
@@ -133,6 +139,7 @@ func DefaultConfig() *Config {
 		ExcludeDirs:             []string{"vendor", ".git", "node_modules", "testdata"},
 		NoColor:                 false,
 		Verbose:                 false,
+		LogLevel:                logLevel,
 		ShowVersion:             false,
 		ClassifierProvider:      provider,
 		ClassifierEndpoint:      endpointEnv,
@@ -174,6 +181,7 @@ func ParseFlags(args []string, stderr io.Writer) (*Config, error) {
 	fs.StringVar(&excludeRaw, "exclude", "", "Comma-separated paths or directories to exclude")
 	fs.BoolVar(&cfg.NoColor, "no-color", cfg.NoColor, "Disable colored terminal output")
 	fs.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "Enable verbose output logging")
+	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Logging verbosity: debug, info, warn, or error")
 	fs.BoolVar(&cfg.ShowVersion, "version", cfg.ShowVersion, "Print scanner version and exit")
 	fs.StringVar(&cfg.DiffRange, "diff", "", "Scan only code modified in git diff range (e.g. HEAD~1, main...HEAD)")
 
@@ -299,6 +307,11 @@ func ParseFlags(args []string, stderr io.Writer) (*Config, error) {
 
 	if cfg.MinConfidence < 0.0 || cfg.MinConfidence > 1.0 {
 		return nil, errors.New("confidence must be between 0.0 and 1.0")
+	}
+
+	cfg.LogLevel = strings.ToLower(strings.TrimSpace(cfg.LogLevel))
+	if _, err := ParseLogLevel(cfg.LogLevel); err != nil {
+		return nil, err
 	}
 
 	cfg.AnalysisStrategy = strings.ToLower(cfg.AnalysisStrategy)

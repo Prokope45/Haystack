@@ -39,6 +39,7 @@ func TestParseFlagsCustom(t *testing.T) {
 		"--exclude", "dist,build",
 		"--no-color",
 		"--verbose",
+		"--log-level", "debug",
 		tmpDir,
 	}
 
@@ -64,6 +65,25 @@ func TestParseFlagsCustom(t *testing.T) {
 	}
 	if !cfg.Verbose {
 		t.Errorf("expected Verbose to be true")
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("expected log level debug, got %q", cfg.LogLevel)
+	}
+}
+
+func TestDefaultLogLevelFromEnvironment(t *testing.T) {
+	t.Setenv("HAYSTACK_LOG_LEVEL", "INFO")
+	cfg := DefaultConfig()
+	if cfg.LogLevel != "info" {
+		t.Errorf("expected environment log level to be normalized to info, got %q", cfg.LogLevel)
+	}
+}
+
+func TestParseFlagsInvalidLogLevel(t *testing.T) {
+	buf := new(bytes.Buffer)
+	_, err := ParseFlags([]string{"--log-level", "trace", t.TempDir()}, buf)
+	if err == nil {
+		t.Fatal("expected invalid log level to return an error")
 	}
 }
 

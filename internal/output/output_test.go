@@ -61,6 +61,12 @@ func TestTextFormatter(t *testing.T) {
 	if !strings.Contains(out, "subprocess.run") {
 		t.Errorf("expected output to contain code snippet")
 	}
+	if !strings.Contains(out, "Explanation (CWE description):") {
+		t.Errorf("expected CWE description to be used when no generated explanation is available")
+	}
+	if !strings.Contains(out, "OS command injection weakness") {
+		t.Errorf("expected output to contain the CWE description fallback")
+	}
 }
 
 func TestJSONFormatter(t *testing.T) {

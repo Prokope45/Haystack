@@ -62,6 +62,7 @@ func jevClient(cfg *config.Config, fallback classifier.Classifier) classifier.Cl
 		APIKey:         apiKey,
 		Timeout:        cfg.ClassifierTimeout,
 		Fallback:       fallback,
+		Logger:         config.NewLogger(cfg.LogLevel, nil),
 	})
 }
 
@@ -116,6 +117,7 @@ func defaultClient(cfg *config.Config, fallback classifier.Classifier) classifie
 			APIKey:         cfg.OpenRouterAPIKey,
 			Timeout:        cfg.ClassifierTimeout,
 			Fallback:       fallback,
+			Logger:         config.NewLogger(cfg.LogLevel, nil),
 		})
 	}
 
