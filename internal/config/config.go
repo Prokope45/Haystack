@@ -45,6 +45,8 @@ type Config struct {
 
 // DefaultConfig returns default configuration settings.
 func DefaultConfig() *Config {
+	LoadDotEnv()
+
 	modelEnv := os.Getenv("RLCD_MODEL")
 	if modelEnv == "" {
 		modelEnv = os.Getenv("KEV_MODEL")
