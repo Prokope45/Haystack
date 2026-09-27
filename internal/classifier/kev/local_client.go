@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"haystack/internal/classifier"
+	"haystack/internal/classifier/heuristic"
 )
 
 const (
@@ -59,7 +60,7 @@ func NewLocalClient(opts LocalClientOptions) *LocalClient {
 
 	fallback := opts.Fallback
 	if fallback == nil {
-		fallback = NewHeuristicClassifier()
+		fallback = heuristic.NewHeuristicClassifier()
 	}
 
 	return &LocalClient{

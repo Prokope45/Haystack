@@ -254,4 +254,5 @@ func runCommand(w http.ResponseWriter, r *http.Request) {
 	t.Logf("  Label:       %s", f.Classification.Label)
 	t.Logf("  Confidence:  %.2f", f.Classification.Confidence)
 	t.Logf("  Explanation: %s", f.Classification.Explanation)
+	t.Logf("  Explanation: %s", f.AnalysisMetadata.Strategy)
 }

@@ -10,6 +10,7 @@ import (
 
 	"haystack/internal/analyzer"
 	"haystack/internal/classifier"
+	"haystack/internal/classifier/heuristic"
 )
 
 func TestLocalClientSuccess(t *testing.T) {
@@ -61,7 +62,7 @@ func TestLocalClientSuccess(t *testing.T) {
 
 func TestLocalClientFallbackWhenOffline(t *testing.T) {
 	// Point to an unreachable port
-	fallback := NewHeuristicClassifier()
+	fallback := heuristic.NewHeuristicClassifier()
 	client := NewLocalClient(LocalClientOptions{
 		Endpoint: "http://127.0.0.1:59123/classify",
 		Timeout:  100 * time.Millisecond,

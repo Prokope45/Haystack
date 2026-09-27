@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"haystack/internal/classifier"
+	"haystack/internal/classifier/heuristic"
 	"haystack/internal/classifier/kev"
 	"haystack/internal/classifier/openrouter"
 	"haystack/internal/classifier/rlcd"
@@ -13,15 +14,86 @@ import (
 // NewClassifier creates the appropriate Classifier implementation based on the supplied Config.
 func NewClassifier(cfg *config.Config) classifier.Classifier {
 	if cfg == nil {
-		return kev.NewHeuristicClassifier()
+		return heuristic.NewHeuristicClassifier()
 	}
 
-	fallback := kev.NewHeuristicClassifier()
+	fallback := heuristic.NewHeuristicClassifier()
 
 	provider := strings.ToLower(strings.TrimSpace(cfg.ClassifierProvider))
 
 	switch provider {
 	case "jev", "openrouter":
+		return jevClient(cfg, fallback)
+	case "kev":
+		return kevClient(cfg, fallback)
+	case "rlcd":
+		return rlcdClient(cfg, fallback)
+	case "heuristic":
+		return fallback
+	default:
+		return defaultClient(cfg, fallback)
+	}
+}
+
+func jevClient(cfg *config.Config, fallback classifier.Classifier) classifier.Classifier {
+	endpoint := cfg.ClassifierEndpoint
+	if endpoint == "" {
+		endpoint = cfg.OpenRouterBaseURL
+	}
+	explainerModel := cfg.OpenRouterModel
+	if explainerModel == "" {
+		explainerModel = "openrouter/free"
+	}
+	if cfg.ClassifierModel != "" && cfg.ClassifierModel != "heuristic" && cfg.ClassifierModel != "jev" {
+		explainerModel = cfg.ClassifierModel
+	}
+	systemOneModel := cfg.SystemOneModel
+	if systemOneModel == "" {
+		systemOneModel = openrouter.SystemOneModel
+	}
+	apiKey := cfg.ClassifierAPIKey
+	if apiKey == "" {
+		apiKey = cfg.OpenRouterAPIKey
+	}
+	return openrouter.NewClient(openrouter.ClientOptions{
+		BaseURL:        endpoint,
+		SystemOneModel: systemOneModel,
+		ExplainerModel: explainerModel,
+		APIKey:         apiKey,
+		Timeout:        cfg.ClassifierTimeout,
+		Fallback:       fallback,
+	})
+}
+
+func kevClient(cfg *config.Config, fallback classifier.Classifier) classifier.Classifier {
+	endpoint := cfg.ClassifierEndpoint
+	if endpoint == "" {
+		endpoint = cfg.KevEndpoint
+	}
+	return kev.NewLocalClient(kev.LocalClientOptions{
+		Endpoint: endpoint,
+		Timeout:  cfg.ClassifierTimeout,
+		APIKey:   cfg.ClassifierAPIKey,
+		Fallback: fallback,
+	})
+}
+
+func rlcdClient(cfg *config.Config, fallback classifier.Classifier) classifier.Classifier {
+	if cfg.ClassifierEndpoint != "" {
+		return rlcd.NewClient(rlcd.ClientOptions{
+			Endpoint: cfg.ClassifierEndpoint,
+			Model:    cfg.ClassifierModel,
+			APIKey:   cfg.ClassifierAPIKey,
+			Timeout:  cfg.ClassifierTimeout,
+			Fallback: fallback,
+		})
+	}
+	return fallback
+}
+
+func defaultClient(cfg *config.Config, fallback classifier.Classifier) classifier.Classifier {
+	// Auto-detection based on configured keys / endpoints
+	if cfg.OpenRouterAPIKey != "" {
 		endpoint := cfg.ClassifierEndpoint
 		if endpoint == "" {
 			endpoint = cfg.OpenRouterBaseURL
@@ -37,83 +109,24 @@ func NewClassifier(cfg *config.Config) classifier.Classifier {
 		if systemOneModel == "" {
 			systemOneModel = openrouter.SystemOneModel
 		}
-		apiKey := cfg.ClassifierAPIKey
-		if apiKey == "" {
-			apiKey = cfg.OpenRouterAPIKey
-		}
 		return openrouter.NewClient(openrouter.ClientOptions{
 			BaseURL:        endpoint,
 			SystemOneModel: systemOneModel,
 			ExplainerModel: explainerModel,
-			APIKey:         apiKey,
+			APIKey:         cfg.OpenRouterAPIKey,
 			Timeout:        cfg.ClassifierTimeout,
 			Fallback:       fallback,
 		})
+	}
 
-	case "kev":
-		endpoint := cfg.ClassifierEndpoint
-		if endpoint == "" {
-			endpoint = cfg.KevEndpoint
-		}
+	if cfg.ClassifierEndpoint != "" {
 		return kev.NewLocalClient(kev.LocalClientOptions{
-			Endpoint: endpoint,
+			Endpoint: cfg.ClassifierEndpoint,
 			Timeout:  cfg.ClassifierTimeout,
 			APIKey:   cfg.ClassifierAPIKey,
 			Fallback: fallback,
 		})
-
-	case "rlcd":
-		if cfg.ClassifierEndpoint != "" {
-			return rlcd.NewClient(rlcd.ClientOptions{
-				Endpoint: cfg.ClassifierEndpoint,
-				Model:    cfg.ClassifierModel,
-				APIKey:   cfg.ClassifierAPIKey,
-				Timeout:  cfg.ClassifierTimeout,
-				Fallback: fallback,
-			})
-		}
-		return fallback
-
-	case "heuristic":
-		return fallback
-
-	default:
-		// Auto-detection based on configured keys / endpoints
-		if cfg.OpenRouterAPIKey != "" {
-			endpoint := cfg.ClassifierEndpoint
-			if endpoint == "" {
-				endpoint = cfg.OpenRouterBaseURL
-			}
-			explainerModel := cfg.OpenRouterModel
-			if explainerModel == "" {
-				explainerModel = "openrouter/free"
-			}
-			if cfg.ClassifierModel != "" && cfg.ClassifierModel != "heuristic" && cfg.ClassifierModel != "jev" {
-				explainerModel = cfg.ClassifierModel
-			}
-			systemOneModel := cfg.SystemOneModel
-			if systemOneModel == "" {
-				systemOneModel = openrouter.SystemOneModel
-			}
-			return openrouter.NewClient(openrouter.ClientOptions{
-				BaseURL:        endpoint,
-				SystemOneModel: systemOneModel,
-				ExplainerModel: explainerModel,
-				APIKey:         cfg.OpenRouterAPIKey,
-				Timeout:        cfg.ClassifierTimeout,
-				Fallback:       fallback,
-			})
-		}
-
-		if cfg.ClassifierEndpoint != "" {
-			return kev.NewLocalClient(kev.LocalClientOptions{
-				Endpoint: cfg.ClassifierEndpoint,
-				Timeout:  cfg.ClassifierTimeout,
-				APIKey:   cfg.ClassifierAPIKey,
-				Fallback: fallback,
-			})
-		}
-
-		return fallback
 	}
+
+	return fallback
 }

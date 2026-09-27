@@ -11,7 +11,7 @@ import (
 
 	"haystack/internal/analyzer"
 	"haystack/internal/classifier"
-	"haystack/internal/classifier/kev"
+	"haystack/internal/classifier/heuristic"
 )
 
 func TestOpenRouterClientTwoStepPipeline(t *testing.T) {
@@ -265,7 +265,7 @@ func TestOpenRouterClientFallbackOnError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	fallback := kev.NewHeuristicClassifier()
+	fallback := heuristic.NewHeuristicClassifier()
 	client := NewClient(ClientOptions{
 		BaseURL:  ts.URL,
 		APIKey:   "test-key",

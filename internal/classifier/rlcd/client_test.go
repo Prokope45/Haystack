@@ -10,7 +10,7 @@ import (
 
 	"haystack/internal/analyzer"
 	"haystack/internal/classifier"
-	"haystack/internal/classifier/kev"
+	"haystack/internal/classifier/heuristic"
 )
 
 func TestRLCDClientJevModel(t *testing.T) {
@@ -86,7 +86,7 @@ func TestRLCDClientFallbackOnServerFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fallback := kev.NewHeuristicClassifier()
+	fallback := heuristic.NewHeuristicClassifier()
 	client := NewClient(ClientOptions{
 		Endpoint: server.URL,
 		Model:    ModelKev,
