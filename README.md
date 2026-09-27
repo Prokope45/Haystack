@@ -1,92 +1,142 @@
 # Haystack
 
-**AI-Assisted Static Security Scanner**
+**Adaptive AI-Assisted Static Security Scanner**
 
-Haystack is a standalone, high-performance static security scanner written in **Go** that inspects source code for security-sensitive behavior and potential vulnerabilities.
+Haystack is a standalone, high-performance static application security testing (SAST) scanner written in **Go** that inspects source code for security-sensitive behavior and vulnerabilities.
 
-Initially supporting **Go** and **Python**, Haystack bridges deterministic static analysis (AST parsing and source-to-sink data-flow tracking) with calibrated decision models (RLCD / Jev / Kev), normalizing findings into standardized CWE classifications and actionable remediation guidance.
+Supporting **Go** and **Python**, Haystack implements a **neuro-symbolic / hybrid SAST architecture**—combining deterministic AST parsing, program indexing, and taint analysis with optional **Jev / System-One** AI planning and evidence classification. Findings are normalized into standardized CWE classifications with actionable remediation guidance.
 
-Haystack can be run as a CLI tool in CI/CD pipelines, executed directly on files and code snippets, or served as an **agentic tool via Model Context Protocol (MCP)** so that AI coding agents can verify code safety and prevent vulnerabilities before writing or committing code.
+Haystack can run offline in CI/CD pipelines, execute directly on files and in-memory snippets, or serve as an **agentic tool via Model Context Protocol (MCP)** so that AI coding agents can verify code safety and prevent vulnerabilities before committing changes.
 
 ---
 
 ## Architecture Overview
 
-Haystack separates deterministic evidence generation from vulnerability decision classification:
+Haystack follows a staged neuro-symbolic pipeline where deterministic static analysis remains the authoritative security foundation, and optional AI services assist in analysis planning and evidence classification:
 
 ```text
 Source Code (or in-memory code snippet)
     │
     ▼
-AST / Static Analysis
-    │
-    ├── Source Detection   (e.g., HTTP params, CLI args, env vars)
-    ├── Sink Detection     (e.g., exec.Command, SQL queries, eval, open)
-    └── Data-Flow Engine   (Intra-procedural taint flow tracking)
+AST / Parsing (Go & Python)
     │
     ▼
-Candidate Security Evidence
+Program Index (internal/index)
+    ├── Tracks files, functions, imports, calls, sources, and sinks
+    └── Cheap structural queries without expensive data-flow analysis
     │
     ▼
-Calibrated Decision Model (RLCD / Jev / Kev API or Local Heuristic)
-    │
-    ├── Model Selection: Jev, Kev, RLCD, or local calibrated heuristic
-    ├── Security relevance & confidence scoring
-    └── Complete preservation of raw probability distributions
+Lightweight Candidate Discovery (internal/candidates)
+    ├── Identifies candidate source-to-sink pairings
+    └── Estimates analysis cost and complexity from proximity and sink type
     │
     ▼
-Finding Normalization
+Analysis Planning (internal/planning)
+    ├── Deterministic Planner : Offline heuristic triage (default)
+    └── Jev AI Planner        : OpenRouter /api/alpha/decisions (~typesafe/jev-latest)
     │
-    ├── CWE Weakness Mapping (e.g., CWE-78, CWE-89, CWE-22, CWE-798, CWE-502)
-    └── Actionable Remediation Guidance
+    ▼
+Analysis Plan (Allocates budgets into shallow, medium, and deep modes)
+    │
+    ▼
+Adaptive SAST Engine (internal/flow & internal/analyzer)
+    ├── Shallow : Intra-statement and immediate invocation verification
+    ├── Medium  : Local function-level taint propagation with bounded hops
+    └── Deep    : Full intra-procedural and inter-procedural taint flow tracking
+    │
+    ▼
+Deterministic Security Rules (internal/rules)
+    └── CWE-78, CWE-89, CWE-22, CWE-798, CWE-502
+    │
+    ▼
+Security Evidence
+    │
+    ▼
+Optional AI Validation (internal/classifier)
+    └── Jev decisions API validation + LLM contextual explanation
+    │
+    ▼
+Normalized Findings + Analysis Metadata (internal/findings)
     │
     ▼
 Reporting & Integrations
-    ├── Terminal UI (ANSI colored flow arrows & snippets)
-    ├── JSON Output (machine-readable)
+    ├── Terminal UI (ANSI colored flow arrows, snippets, and telemetry)
+    ├── JSON Output (with top-level "analysis" telemetry block)
     ├── SARIF 2.1.0 (GitHub / GitLab / CI code scanning)
     └── Model Context Protocol (MCP stdio server for AI agents)
 ```
 
-For the full architectural specification and roadmap, refer to [PROJECT_PLAN.MD](./PROJECT_PLAN.MD).
+For the design specifications, refer to [Adaptive AI Design Plan](agents/Adaptive-ai-design-plan.md) and [POC Design Plan](agents/DESIGN_PLAN.md).
 
 ---
 
-## Calibrated Decision Models (RLCD / Jev / Kev)
+## Adaptive Analysis & Planning
 
-Teams can choose which calibrated decision model they want to use:
+Haystack scales analysis computational cost through explicit analysis strategies and modes:
 
-- **`heuristic`** (default offline): Built-in deterministic, structural probability model requiring no external network access.
-- **`jev`**: Just-in-time Exploit / Vulnerability decision model optimized for rapid triage.
-- **`kev`**: Known Exploited Vulnerability model focused on active exploit patterns.
-- **`rlcd`**: Reinforcement Learning from Canonical Decisions / Compiler critic models.
-- **Custom Models**: Any fine-tuned decision model endpoint.
+### Analysis Strategies
 
-### Configuration Flags & Environment Variables
+- **`adaptive` (default)**: Discovers candidate flows through the program index, formulates an analysis plan (using the deterministic heuristic planner or optional Jev AI planner), and executes static analysis scaled to candidate complexity.
+- **`full`**: Analyzes every candidate with exhaustive deep data-flow analysis.
+
+### Analysis Modes
+
+- **`shallow`**: Fast AST check for direct source-to-sink invocations without multi-hop propagation.
+- **`medium`**: Bounded local function data-flow analysis (up to 4 propagation hops).
+- **`deep`**: Unconstrained taint flow analysis tracking full variable assignments, string formatting, and argument passing.
+
+### AI Dependency Modes (`--ai-mode`)
+
+- **`optional` (default)**: Uses AI services when available. If the external AI service times out or fails, Haystack gracefully falls back to the deterministic planner without failing the scan.
+- **`required`**: Fails the scan with an error if external AI services are unreachable.
+- **`disabled`**: Strictly offline operation; no outbound network calls are made.
+
+---
+
+## Configuration & Environment Variables
+
+All settings can be configured via CLI flags or `.env` file (see [`.env.example`](.env.example)):
+
+### Core & Adaptive Analysis Options
 
 | Flag | Env Variable | Default | Description |
 |------|--------------|---------|-------------|
-| `--classifier-endpoint`, `--classifier-url` | `RLCD_API_URL` or `KEV_API_URL` | `""` | Inference API URL for the remote decision service |
-| `--classifier-model`, `-model` | `RLCD_MODEL` or `KEV_MODEL` | `heuristic` | Model identifier (`jev`, `kev`, `rlcd`, `heuristic`, or custom) |
-| `--classifier-api-key` | `RLCD_API_KEY` or `KEV_API_KEY` | `""` | Bearer token / API key for remote model service |
-| `--classifier-timeout` | | `5s` | HTTP request timeout in seconds |
+| `--analysis` | `ANALYSIS_STRATEGY` | `adaptive` | Analysis strategy: `adaptive` or `full` |
+| `--ai-planner` | `AI_PLANNER` | `false` | Enable external AI planner (Jev) for candidate triage |
+| `--ai-classifier` | `AI_CLASSIFIER` | `false` | Enable external AI finding classifier |
+| `--ai-mode` | `AI_MODE` | `optional` | AI failure handling: `optional`, `required`, or `disabled` |
+| `--verbose-analysis` | | `false` | Display detailed candidate planning telemetry in terminal |
+| `--diff` | | `""` | Scan only code modified in Git diff range (e.g. `HEAD~1`, `main...HEAD`) |
+| `--max-depth` | | `8` | Maximum data flow search depth |
+| `--max-candidates` | | `1000` | Maximum candidate flows to analyze |
+| `--max-deep-candidates` | | `100` | Maximum candidates receiving deep analysis |
 
-If a remote model API is configured but temporarily unavailable, Haystack gracefully falls back to the calibrated local heuristic classifier.
+### AI Provider & Classifier Options
+
+| Flag | Env Variable | Default | Description |
+|------|--------------|---------|-------------|
+| `--classifier-provider` | `CLASSIFIER_PROVIDER` | `heuristic` | Provider: `heuristic`, `jev`, `kev`, `rlcd`, `openrouter` |
+| `--classifier-endpoint` | `RLCD_API_URL` or `KEV_API_URL` | `""` | Remote classifier endpoint URL |
+| `--classifier-model` | `RLCD_MODEL` or `KEV_MODEL` | `heuristic` | Model identifier |
+| `--classifier-api-key` | `RLCD_API_KEY` or `KEV_API_KEY` | `""` | API key / Bearer token |
+| `--classifier-timeout` | | `5s` | Classifier request timeout in seconds |
+| `--openrouter-api-key` | `OPENROUTER_API_KEY` | `""` | OpenRouter API Key for Jev / System-One |
+| `--system-one-model` | `SYSTEM_ONE_MODEL` | `~typesafe/jev-latest` | Jev decision model for decisions API |
+| `--openrouter-model` | `OPENROUTER_MODEL` | `openrouter/free` | LLM model for vulnerability explanations |
+| `--openrouter-base-url` | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL |
 
 ---
 
 ## Agentic Tool Support (MCP & CLI)
 
-Haystack can be used by AI coding agents (such as Claude, OpenCode, Cursor, and Windsurf) to scan generated code before saving, committing, or executing it.
+Haystack provides first-class support for AI coding agents (such as Claude, OpenCode, Cursor, and Windsurf) through MCP and CLI interfaces.
 
 ### 1. Model Context Protocol (MCP) Server
 
-Start Haystack as a standard MCP server communicating over stdio:
+Start Haystack as a standard MCP server communicating over `stdio`:
 
 ```bash
 scanner mcp
-# Or with remote RLCD decision model:
-scanner mcp --classifier-endpoint https://rlcd.internal/v1/classify --classifier-model jev
 ```
 
 #### MCP Client Configuration Example
@@ -106,17 +156,24 @@ Add Haystack to your `mcpServers` configuration (e.g., `claude_desktop_config.js
 
 #### Available MCP Tools
 
-1. **`scan_code`**: Scans an in-memory string of Go or Python code directly.
-   - Arguments: `code` (string, required), `language` ("go" or "python", required), `filename` (optional), `min_severity` (optional), `min_confidence` (optional).
-   - Returns: Instant verdict (`is_safe: true/false`), findings count, structured taint flow steps, and remediation advice.
-2. **`scan_file`**: Scans an individual Go or Python file on disk.
-   - Arguments: `path` (string, required), `min_severity` (optional).
-3. **`scan_directory`**: Scans an entire project or workspace directory.
-   - Arguments: `path` (string, optional), `min_severity` (optional).
+| Tool | Type | Description |
+|------|------|-------------|
+| **`scan`** | Read | Full project security scan across Go and Python source files with adaptive triage. |
+| **`scan_diff`** | Read | Scan only code modified between Git references or unstaged working tree changes. |
+| **`get_analysis_plan`** | Read | Inspect candidate triage and the adaptive plan without executing full static analysis. |
+| **`scan_code`** | Read | Scan in-memory Go or Python code strings directly with instant safety verdict (`is_safe`). |
+| **`scan_file`** | Read | Scan an individual Go or Python file on disk. |
+| **`explain_finding`** | Read | Retrieve a structured, in-depth explanation and risk assessment for a finding ID. |
+| **`get_remediation`** | Read | Get remediation steps, code examples, and mitigation guidance for a finding. |
+| **`get_security_status`**| Read | Overview of scanned files, active findings, severity counts, and safe verdict. |
+| **`prepare_issue`** | Read | Draft a tracked security issue from a finding without performing side effects. |
+| **`create_issue`** | Write | Create a tracked issue on GitHub with automated fingerprint deduplication. |
+| **`update_issue`** | Write | Add comments or update status on an existing tracked issue. |
+| **`close_issue`** | Write | Close a tracked issue after remediation has been verified. |
 
 ### 2. Direct CLI Code Snippet Scanning (`scan-code`)
 
-Agents executing commands via bash / terminal tool calls can invoke `scan-code`:
+Agents executing commands in terminal sessions can invoke `scan-code`:
 
 ```bash
 # Scan a Go code snippet directly
@@ -139,19 +196,25 @@ EOF
 ```
 
 - **Exit code `0`**: Code is safe (no vulnerabilities found above threshold).
-- **Exit code `1`**: Vulnerabilities found.
-- **Exit code `3`**: Source syntax error.
+- **Exit code `1`**: Security findings detected.
+- **Exit code `3`**: Source syntax / parsing error.
 
 ---
 
 ## Standard CLI Usage
 
 ```bash
-# Scan a directory
-scanner ./path/to/project
+# Scan workspace directory using default adaptive analysis
+scanner .
 
-# Scan an individual file directly
-scanner ./src/api/handler.go
+# Scan with verbose analysis telemetry
+scanner . --verbose-analysis
+
+# Scan only code changed in git diff
+scanner . --diff HEAD~1
+
+# Run with external AI planner (Jev)
+scanner . --ai-planner
 
 # Scan with JSON output format
 scanner . --format json
@@ -159,7 +222,7 @@ scanner . --format json
 # Fail CI pipeline on high-severity findings
 scanner . --fail-on high --confidence 0.80
 
-# Generate SARIF report for GitHub code scanning
+# Generate SARIF 2.1.0 report for GitHub code scanning
 scanner . --format sarif > results.sarif
 ```
 
@@ -198,22 +261,25 @@ golangci-lint run ./...
 ```text
 .
 ├── cmd/
-│   └── scanner/               # CLI entrypoint with mcp, scan-code, and file/dir scanning
+│   ├── scanner/               # CLI entrypoint with mcp, scan-code, and dir scanning
+│   └── scanner-mcp/           # Dedicated MCP server binary entrypoint
 ├── internal/
+│   ├── index/                 # Program index constructed from ASTs
+│   ├── candidates/            # Candidate discovery & cost estimation
+│   ├── planning/              # Deterministic planner, candidate plans & budgets
+│   ├── ai/                    # Jev AI planner client & OpenRouter decisions integration
 │   ├── analyzer/              # AST parsers & language analyzers (Go, Python)
-│   ├── classifier/            # Classifier interface & implementations
-│   │   ├── kev/               # Calibrated heuristic baseline & Kev HTTP adapter
-│   │   └── rlcd/              # Generalized RLCD/Jev/Kev multi-model client
-│   ├── config/                # CLI & scanner configuration with env var support
-│   ├── findings/              # Finding models and normalization
-│   ├── flow/                  # Intra-procedural data-flow analysis
-│   ├── intelligence/          # Authoritative CWE catalog & remediations
-│   ├── mcp/                   # Model Context Protocol JSON-RPC 2.0 stdio server
-│   ├── output/                # Terminal, JSON, and SARIF 2.1.0 formatters
+│   ├── flow/                  # Bounded intra-procedural data-flow tracking
 │   ├── rules/                 # Deterministic security rules (CWE-78, 89, 22, 798, 502)
-│   └── scanner/               # Scan orchestrator, discovery, and in-memory analyzer
-├── testdata/                  # Intentionally vulnerable & safe test fixtures (Go, Python)
-├── benchmarks/                # Precision, recall, and performance benchmarks
-├── examples/                  # CI/CD pipeline examples (GitHub Actions, etc.)
+│   ├── classifier/            # Post-analysis classifier models (Jev, Kev, RLCD)
+│   ├── findings/              # Finding models, analysis metadata & normalization
+│   ├── issues/                # Issue provider abstraction & GitHub provider
+│   ├── mcp/                   # Model Context Protocol JSON-RPC 2.0 stdio server
+│   ├── output/                # Terminal UI, JSON (with telemetry), and SARIF 2.1.0 formatters
+│   ├── config/                # Configuration flags and .env loading
+│   └── scanner/               # Scan orchestrator, diff scanner, and discovery
+├── testdata/                  # Vulnerable & safe test fixtures (Go, Python)
+├── benchmarks/                # Precision, recall, and evaluation benchmarks
+├── agents/                    # Architecture and design plan specifications
 └── README.md
 ```
