@@ -145,14 +145,17 @@ func (s *Server) callScanFile(id interface{}, ctx context.Context, args map[stri
 		return s.toolError(id, "'path' argument is required")
 	}
 
-	orch := s.getOrchestratorForArgs(args)
-	findingsList, _, err := orch.ScanFile(ctx, path)
+	result, err := s.scannerSvc.ScanFile(ctx, scanner.ScanCodeRequest{
+		Filename:      path,
+		MinSeverity:   stringArgument(args, "min_severity"),
+		MinConfidence: numberArgument(args, "min_confidence"),
+	})
 	if err != nil {
 		return s.toolError(id, fmt.Sprintf("File scan error: %v", err))
 	}
 
-	s.storeFindings(findingsList)
-	return s.renderFindingsResult(id, findingsList)
+	s.storeFindings(result.Findings)
+	return s.renderFindingsResult(id, result.Findings)
 }
 
 func (s *Server) callScanCode(id interface{}, ctx context.Context, args map[string]interface{}) *JSONRPCResponse {
@@ -167,25 +170,27 @@ func (s *Server) callScanCode(id interface{}, ctx context.Context, args map[stri
 		return s.toolError(id, "'language' argument is required ('go' or 'python')")
 	}
 
-	orch := s.getOrchestratorForArgs(args)
-	findingsList, _, err := orch.ScanCode(ctx, []byte(codeStr), langStr, filename)
+	result, err := s.scannerSvc.ScanCode(ctx, scanner.ScanCodeRequest{
+		Code: []byte(codeStr), Language: langStr, Filename: filename,
+		MinSeverity:   stringArgument(args, "min_severity"),
+		MinConfidence: numberArgument(args, "min_confidence"),
+	})
 	if err != nil {
 		return s.toolError(id, fmt.Sprintf("Analysis error: %v", err))
 	}
 
-	s.storeFindings(findingsList)
-	return s.renderFindingsResult(id, findingsList)
+	s.storeFindings(result.Findings)
+	return s.renderFindingsResult(id, result.Findings)
 }
 
-func (s *Server) getOrchestratorForArgs(args map[string]interface{}) *scanner.Orchestrator {
-	cfg := *s.cfg
-	if sev, ok := args["min_severity"].(string); ok && sev != "" {
-		cfg.MinSeverity = sev
-	}
-	if conf, ok := args["min_confidence"].(float64); ok && conf > 0 {
-		cfg.MinConfidence = conf
-	}
-	return scanner.NewOrchestrator(&cfg)
+func stringArgument(args map[string]interface{}, key string) string {
+	value, _ := args[key].(string)
+	return value
+}
+
+func numberArgument(args map[string]interface{}, key string) float64 {
+	value, _ := args[key].(float64)
+	return value
 }
 
 func (s *Server) renderFindingsResult(id interface{}, list []findings.Finding) *JSONRPCResponse {

@@ -53,6 +53,7 @@ type Config struct {
 	MaxDeepCandidates       int           // Maximum candidates receiving deep analysis (default: 100)
 	MaxPathsPerCandidate    int           // Maximum exploration paths per candidate (default: 500)
 	VerboseAnalysis         bool          // Display detailed candidate planning telemetry
+	NoCache                 bool          // Bypass scanner cache for this invocation
 }
 
 // DefaultConfig returns default configuration settings.
@@ -207,6 +208,7 @@ func ParseFlags(args []string, stderr io.Writer) (*Config, error) {
 	fs.BoolVar(&cfg.AIClassifierEnabled, "ai-classifier", false, "Enable external AI finding classifier")
 	fs.StringVar(&cfg.AIMode, "ai-mode", cfg.AIMode, "AI mode: 'disabled', 'optional', or 'required' (default: optional)")
 	fs.BoolVar(&cfg.VerboseAnalysis, "verbose-analysis", false, "Display detailed analysis breakdown and telemetry")
+	fs.BoolVar(&cfg.NoCache, "no-cache", false, "Bypass scanner cache for this invocation")
 	fs.IntVar(&cfg.MaxDepth, "max-depth", cfg.MaxDepth, "Maximum data flow depth (default: 8)")
 	fs.IntVar(&cfg.MaxCandidates, "max-candidates", cfg.MaxCandidates, "Maximum security candidates to analyze (default: 1000)")
 	fs.IntVar(&cfg.MaxDeepCandidates, "max-deep-candidates", cfg.MaxDeepCandidates, "Maximum candidates to analyze with deep mode (default: 100)")
@@ -226,6 +228,8 @@ func ParseFlags(args []string, stderr io.Writer) (*Config, error) {
 		"-ai-classifier":    true,
 		"verbose-analysis":  true,
 		"-verbose-analysis": true,
+		"no-cache":          true,
+		"-no-cache":         true,
 	}
 
 	var flagArgs []string

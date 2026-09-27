@@ -110,6 +110,7 @@ All settings can be configured via CLI flags or `.env` file (see [`.env.example`
 | `--max-depth` | | `8` | Maximum data flow search depth |
 | `--max-candidates` | | `1000` | Maximum candidate flows to analyze |
 | `--max-deep-candidates` | | `100` | Maximum candidates receiving deep analysis |
+| `--no-cache` | | `false` | Bypass cache reads and writes for this scan |
 
 ### AI Provider & Classifier Options
 
@@ -227,6 +228,29 @@ scanner . --fail-on high --confidence 0.80
 scanner . --format sarif > results.sarif
 ```
 
+### Scanner cache
+
+Haystack caches complete scan results by default. Cache keys include source content and paths, scan options, scanner and rule versions, parser/runtime identity, and relevant AI provider/model settings. Successful planner and remote classifier responses are also cached independently, so they can be reused when a final scan result must be recomputed. Cache hits reuse results without changing scanner security semantics; cache misses run the normal analysis.
+
+Use `--no-cache` to force a fresh scan and bypass both final-result and AI cache reads and writes:
+
+```bash
+scanner . --no-cache
+scanner scan-code --lang go --code 'package main' --no-cache
+```
+
+The default location follows the operating system's user cache directory (for example, `~/.cache/haystack` on Linux, `~/Library/Caches/haystack` on macOS, and the local application cache directory on Windows). Set `SCANNER_CACHE_DIR` to use a different location:
+
+```bash
+SCANNER_CACHE_DIR=/path/to/scanner-cache scanner .
+```
+
+Run with `--verbose` or `--verbose-analysis` to see cache hit/miss diagnostics on stderr. Cache files are disposable: deleting or losing the cache only causes scans to run again.
+
+For CI, persistent runners can reuse their local cache. Ephemeral runners need the CI system to save and restore `SCANNER_CACHE_DIR` between jobs for cross-job reuse. The scanner continues to work when the cache is empty, unavailable, or removed.
+
+When changing scanner behavior, update `internal/buildinfo.ScannerVersion`; when changing default security rules, update `internal/rules.RulesVersion`. Update the AI prompt or schema version constants when their respective contracts change. These version identities invalidate affected entries without requiring old cache files to be deleted.
+
 ### Exit Codes
 
 | Exit Code | Meaning |
@@ -265,6 +289,8 @@ golangci-lint run ./...
 │   ├── scanner/               # CLI entrypoint with mcp, scan-code, and dir scanning
 │   └── scanner-mcp/           # Dedicated MCP server binary entrypoint
 ├── internal/
+│   ├── cache/                 # Content-addressed filesystem cache
+│   ├── buildinfo/             # Scanner and AI contract versions for invalidation
 │   ├── index/                 # Program index constructed from ASTs
 │   ├── candidates/            # Candidate discovery & cost estimation
 │   ├── planning/              # Deterministic planner, candidate plans & budgets

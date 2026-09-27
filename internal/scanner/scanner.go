@@ -12,6 +12,7 @@ import (
 	"haystack/internal/analyzer"
 	"haystack/internal/analyzer/golang"
 	"haystack/internal/analyzer/python"
+	"haystack/internal/cache"
 	"haystack/internal/candidates"
 	"haystack/internal/classifier"
 	"haystack/internal/classifier/factory"
@@ -34,6 +35,17 @@ type ScanRequest struct {
 	MinConfidence float64  `json:"min_confidence,omitempty"`
 	Strategy      string   `json:"strategy,omitempty"`   // "adaptive" or "full"
 	AIPlanner     bool     `json:"ai_planner,omitempty"` // enable external AI planner
+	NoCache       bool     `json:"-"`                    // bypass all cache reads and writes
+}
+
+// ScanCodeRequest describes a scan of in-memory code or one file's contents.
+type ScanCodeRequest struct {
+	Code          []byte
+	Language      string
+	Filename      string
+	MinSeverity   string
+	MinConfidence float64
+	NoCache       bool
 }
 
 // ScanResult encapsulates findings and operational statistics.
@@ -41,11 +53,23 @@ type ScanResult struct {
 	Findings []findings.Finding     `json:"findings"`
 	Summary  output.ScanSummary     `json:"summary"`
 	Plan     *planning.AnalysisPlan `json:"plan,omitempty"`
+	Cache    CacheStats             `json:"-"`
+}
+
+// CacheStats reports cache activity for one scanner-service invocation.
+type CacheStats struct {
+	FinalResult      string `json:"final_result,omitempty"`
+	PlannerHits      int    `json:"planner_hits,omitempty"`
+	PlannerMisses    int    `json:"planner_misses,omitempty"`
+	ClassifierHits   int    `json:"classifier_hits,omitempty"`
+	ClassifierMisses int    `json:"classifier_misses,omitempty"`
 }
 
 // Scanner defines the primary security scanner interface per DESIGN_PLAN.md Section 28.
 type Scanner interface {
 	Scan(ctx context.Context, req ScanRequest) (*ScanResult, error)
+	ScanCode(ctx context.Context, req ScanCodeRequest) (*ScanResult, error)
+	ScanFile(ctx context.Context, req ScanCodeRequest) (*ScanResult, error)
 	GetAnalysisPlan(ctx context.Context, req ScanRequest) (*planning.AnalysisPlan, error)
 }
 
@@ -101,24 +125,62 @@ func NewOrchestrator(cfg *config.Config) *Orchestrator {
 
 // ScannerService adapts Orchestrator to the Scanner interface.
 type ScannerService struct {
-	orch *Orchestrator
+	orch             *Orchestrator
+	cache            cache.Cache
+	cacheUnavailable bool
 }
 
 // NewScanner creates a new Scanner instance conforming to the Scanner interface.
 func NewScanner(cfg *config.Config) Scanner {
-	return &ScannerService{
-		orch: NewOrchestrator(cfg),
+	disk, err := cache.NewDisk("")
+	service := NewScannerWithCache(cfg, disk)
+	service.cacheUnavailable = err != nil
+	return service
+}
+
+// NewScannerWithCache creates a scanner service with an injected cache. Passing
+// nil disables caching and is useful for embedding and tests.
+func NewScannerWithCache(cfg *config.Config, cacheStore cache.Cache) *ScannerService {
+	if cfg == nil {
+		cfg = config.DefaultConfig()
 	}
+	service := &ScannerService{orch: NewOrchestrator(cfg), cache: cacheStore}
+	service.configureIndependentCaches(service.orch)
+	return service
 }
 
 // Scan satisfies the Scanner interface.
 func (s *ScannerService) Scan(ctx context.Context, req ScanRequest) (*ScanResult, error) {
-	return s.orch.ScanRequest(ctx, req)
+	return s.scanRequest(ctx, s.orch, req)
+}
+
+// ScanCode executes and caches an in-memory source scan through the shared service.
+func (s *ScannerService) ScanCode(ctx context.Context, req ScanCodeRequest) (*ScanResult, error) {
+	return s.scanCode(ctx, s.orch, req)
+}
+
+// ScanFile reads and scans a source file through the shared service.
+func (s *ScannerService) ScanFile(ctx context.Context, req ScanCodeRequest) (*ScanResult, error) {
+	content, err := os.ReadFile(req.Filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file %s: %w", req.Filename, err)
+	}
+	req.Code = content
+	return s.scanCode(ctx, s.orch, req)
 }
 
 // GetAnalysisPlan satisfies the Scanner interface.
 func (s *ScannerService) GetAnalysisPlan(ctx context.Context, req ScanRequest) (*planning.AnalysisPlan, error) {
-	return s.orch.GetAnalysisPlan(ctx, req)
+	state := &invocationCacheState{bypass: req.NoCache || s.orch.cfg.NoCache}
+	ctx = context.WithValue(ctx, invocationStateKey{}, state)
+	orch := s.orch
+	if req.AIPlanner && !orch.cfg.AIPlannerEnabled {
+		cfg := *orch.cfg
+		cfg.AIPlannerEnabled = true
+		orch = NewOrchestrator(&cfg)
+		s.configureIndependentCaches(orch)
+	}
+	return orch.GetAnalysisPlan(ctx, req)
 }
 
 // Scan executes the full scanning workflow against target path (file or directory).
@@ -451,7 +513,7 @@ func (o *Orchestrator) ScanRequest(ctx context.Context, req ScanRequest) (*ScanR
 
 	var aiReqs int
 	var aiLat time.Duration
-	if jp, ok := planner.(*ai.JevPlanner); ok {
+	if jp, ok := planner.(interface{ Telemetry() (int, time.Duration) }); ok {
 		aiReqs, aiLat = jp.Telemetry()
 	}
 
@@ -607,7 +669,7 @@ func (o *Orchestrator) ScanCode(ctx context.Context, code []byte, language strin
 
 	var aiReqs int
 	var aiLat time.Duration
-	if jp, ok := o.planner.(*ai.JevPlanner); ok {
+	if jp, ok := o.planner.(interface{ Telemetry() (int, time.Duration) }); ok {
 		aiReqs, aiLat = jp.Telemetry()
 	}
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"haystack/internal/buildinfo"
 	"haystack/internal/config"
 	"haystack/internal/findings"
 	"haystack/internal/mcp"
@@ -15,7 +16,7 @@ import (
 	"haystack/internal/scanner"
 )
 
-const version = "0.1.0-poc"
+const version = buildinfo.ScannerVersion
 
 func main() {
 	if len(os.Args) > 1 {
@@ -68,6 +69,7 @@ func runScanCode(args []string) {
 	fs.BoolVar(&cfg.AIPlannerEnabled, "ai-planner", false, "Enable external AI planner for candidate triage")
 	fs.BoolVar(&cfg.AIClassifierEnabled, "ai-classifier", false, "Enable external AI finding classifier")
 	fs.BoolVar(&cfg.VerboseAnalysis, "verbose-analysis", false, "Display detailed analysis breakdown and telemetry")
+	fs.BoolVar(&cfg.NoCache, "no-cache", false, "Bypass scanner cache for this invocation")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
@@ -101,10 +103,14 @@ func runScanCode(args []string) {
 		os.Exit(config.ExitConfigError)
 	}
 
-	orch := scanner.NewOrchestrator(cfg)
+	svc := scanner.NewScanner(cfg)
 	ctx := context.Background()
 
-	results, summary, err := orch.ScanCode(ctx, codeBytes, lang, filename)
+	result, err := svc.ScanCode(ctx, scanner.ScanCodeRequest{
+		Code: codeBytes, Language: lang, Filename: filename,
+		MinSeverity: cfg.MinSeverity, MinConfidence: cfg.MinConfidence,
+		NoCache: cfg.NoCache,
+	})
 	if err != nil {
 		if strings.Contains(err.Error(), "parser error") || strings.Contains(err.Error(), "syntax error") {
 			fmt.Fprintf(os.Stderr, "Source parsing error: %v\n", err)
@@ -114,6 +120,10 @@ func runScanCode(args []string) {
 		os.Exit(config.ExitInternalError)
 	}
 
+	results, summary := result.Findings, result.Summary
+	if cfg.VerboseAnalysis {
+		writeCacheDiagnostics(os.Stderr, result.Cache)
+	}
 	var formatter output.Formatter
 	switch strings.ToLower(cfg.Format) {
 	case "json":
@@ -157,10 +167,10 @@ func runScan(args []string) {
 		fmt.Fprintf(os.Stderr, "[info] Scanning path: %s\n", cfg.TargetDir)
 	}
 
-	orch := scanner.NewOrchestrator(cfg)
+	svc := scanner.NewScanner(cfg)
 	ctx := context.Background()
 
-	results, summary, err := orch.Scan(ctx)
+	result, err := svc.Scan(ctx, scanner.ScanRequest{NoCache: cfg.NoCache})
 	if err != nil {
 		if strings.Contains(err.Error(), "parser error") || strings.Contains(err.Error(), "syntax error") {
 			fmt.Fprintf(os.Stderr, "Source parsing error: %v\n", err)
@@ -170,6 +180,10 @@ func runScan(args []string) {
 		os.Exit(config.ExitInternalError)
 	}
 
+	results, summary := result.Findings, result.Summary
+	if cfg.Verbose || cfg.VerboseAnalysis {
+		writeCacheDiagnostics(os.Stderr, result.Cache)
+	}
 	// Select formatter
 	var formatter output.Formatter
 	switch cfg.Format {
@@ -197,4 +211,17 @@ func runScan(args []string) {
 	}
 
 	os.Exit(config.ExitSuccess)
+}
+
+func writeCacheDiagnostics(w io.Writer, stats scanner.CacheStats) {
+	if stats.FinalResult == "" {
+		return
+	}
+	fmt.Fprintf(w, "Cache:\n  final result: %s\n", stats.FinalResult)
+	if stats.PlannerHits+stats.PlannerMisses > 0 {
+		fmt.Fprintf(w, "  AI planner:   %d hit(s), %d miss(es)\n", stats.PlannerHits, stats.PlannerMisses)
+	}
+	if stats.ClassifierHits+stats.ClassifierMisses > 0 {
+		fmt.Fprintf(w, "  classifier:   %d hit(s), %d miss(es)\n", stats.ClassifierHits, stats.ClassifierMisses)
+	}
 }

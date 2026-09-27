@@ -109,6 +109,12 @@ func (jp *JevPlanner) Name() string {
 	return "jev"
 }
 
+// CacheIdentity returns the non-secret provider details that affect planner
+// output. Credentials are intentionally excluded.
+func (jp *JevPlanner) CacheIdentity() (provider, model, endpoint string) {
+	return "jev", jp.model, jp.decisionsURL
+}
+
 // Telemetry returns recorded planning request count and latency.
 func (jp *JevPlanner) Telemetry() (int, time.Duration) {
 	jp.mu.Lock()

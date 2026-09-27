@@ -39,6 +39,7 @@ func TestParseFlagsCustom(t *testing.T) {
 		"--exclude", "dist,build",
 		"--no-color",
 		"--verbose",
+		"--no-cache",
 		"--log-level", "debug",
 		tmpDir,
 	}
@@ -65,6 +66,9 @@ func TestParseFlagsCustom(t *testing.T) {
 	}
 	if !cfg.Verbose {
 		t.Errorf("expected Verbose to be true")
+	}
+	if !cfg.NoCache {
+		t.Errorf("expected NoCache to be true")
 	}
 	if cfg.LogLevel != "debug" {
 		t.Errorf("expected log level debug, got %q", cfg.LogLevel)
