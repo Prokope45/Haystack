@@ -181,7 +181,7 @@ Agents executing commands in terminal sessions can invoke `scan-code`:
 
 ```bash
 # Scan a Go code snippet directly
-scanner scan-code --lang go --code '
+scanner scan-code --verbose-analysis --lang go --code '
 package main
 import ("net/http"; "os/exec")
 func Run(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +190,7 @@ func Run(w http.ResponseWriter, r *http.Request) {
 }'
 
 # Scan Python code piped from stdin
-cat << 'EOF' | scanner scan-code --lang python --format json
+cat << 'EOF' | scanner scan-code --verbose-analysis --lang python --format json
 import subprocess
 from flask import request
 def exec_user():
@@ -202,6 +202,50 @@ EOF
 - **Exit code `0`**: Code is safe (no vulnerabilities found above threshold).
 - **Exit code `1`**: Security findings detected.
 - **Exit code `3`**: Source syntax / parsing error.
+
+#### Example Terminal Output
+
+```
+Security Scan
+──────────────────────────────────────────────
+
+HIGH    OS Command Injection
+
+File:       snippet.py
+Line:       5
+CWE:        CWE-78
+Confidence: 100%
+Strategy:   adaptive (priority 85, depth 6, planner: deterministic)
+
+Evidence Flow:
+  source: request.args.get (http_input)
+      ↓
+  sink: subprocess.run (shell_execution)
+
+Code:
+  subprocess.run("ping " + cmd, shell=True)
+
+Explanation:
+  This is a command injection vulnerability where untrusted HTTP input from `request.args.get` is directly concatenated into a shell command string passed to `subprocess.run` with `shell=True`. Because the user-controlled `cmd` parameter is interpolated into the command without sanitization or validation, an attacker can inject arbitrary shell commands using metacharacters such as semicolons or pipes, leading to remote code execution on the server.
+
+Recommendation:
+  Avoid invoking a shell with untrusted input. Prefer direct process execution with explicit arguments list instead of shell-string interpolation.
+
+──────────────────────────────────────────────
+
+Files scanned: 1 (Go: 0, Python: 1)
+Findings:      1
+
+Analysis Telemetry:
+  Strategy:              adaptive
+  Candidates Discovered: 1
+  Candidates Analyzed:   1
+  Candidates Skipped:    0
+  Deep Analyses:         1
+  Medium Analyses:       0
+  Shallow Analyses:      0
+Scan time:     2.493459ms
+```
 
 ---
 
