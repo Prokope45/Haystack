@@ -4,7 +4,7 @@
 
 Haystack is a standalone, high-performance static application security testing (SAST) scanner written in **Go** that inspects source code for security-sensitive behavior and vulnerabilities.
 
-Supporting **Go** and **Python**, Haystack implements a **neuro-symbolic / hybrid SAST architecture**—combining deterministic AST parsing, program indexing, and taint analysis with optional **Jev / System-One** AI planning and evidence classification. Findings are normalized into standardized CWE classifications with actionable remediation guidance.
+Supporting **Go** and **Python**, Haystack implements a **neuro-symbolic / hybrid SAST architecture**—combining deterministic AST parsing, program indexing, and taint analysis with optional **System-One** AI planning and provider-agnostic evidence classification. Findings are normalized into standardized CWE classifications with actionable remediation guidance.
 
 Haystack can run offline in CI/CD pipelines, execute directly on files and in-memory snippets, or serve as an **agentic tool via Model Context Protocol (MCP)** so that AI coding agents can verify code safety and prevent vulnerabilities before committing changes.
 
@@ -33,7 +33,7 @@ Lightweight Candidate Discovery (internal/candidates)
     ▼
 Analysis Planning (internal/planning)
     ├── Deterministic Planner : Offline heuristic triage (default)
-    └── Jev AI Planner        : OpenRouter /api/alpha/decisions (~typesafe/jev-latest)
+    └── System-One AI Planner : OpenRouter /api/alpha/decisions (~typesafe/jev-latest)
     │
     ▼
 Analysis Plan (Allocates budgets into shallow, medium, and deep modes)
@@ -53,7 +53,7 @@ Security Evidence
     │
     ▼
 Optional AI Validation (internal/classifier)
-    └── Jev decisions API validation + LLM contextual explanation
+    └── System-One decisions API validation + LLM contextual explanation
     │
     ▼
 Normalized Findings + Analysis Metadata (internal/findings)
@@ -66,7 +66,7 @@ Reporting & Integrations
     └── Model Context Protocol (MCP stdio server for AI agents)
 ```
 
-For the design specifications, refer to [Adaptive AI Design Plan](agents/Adaptive-ai-design-plan.md) and [POC Design Plan](agents/DESIGN_PLAN.md).
+For the design specifications, refer to the [Adaptive AI Design Plan](agent_plans/adaptive-ai-design-plan.md) and [Application Design Plan](agent_plans/app-design-plan.md).
 
 ---
 
@@ -76,7 +76,7 @@ Haystack scales analysis computational cost through explicit analysis strategies
 
 ### Analysis Strategies
 
-- **`adaptive` (default)**: Discovers candidate flows through the program index, formulates an analysis plan (using the deterministic heuristic planner or optional Jev AI planner), and executes static analysis scaled to candidate complexity.
+- **`adaptive` (default)**: Discovers candidate flows through the program index, formulates an analysis plan (using the deterministic heuristic planner or optional System-One AI planner), and executes static analysis scaled to candidate complexity.
 - **`full`**: Analyzes every candidate with exhaustive deep data-flow analysis.
 
 ### Analysis Modes
@@ -104,7 +104,7 @@ All settings can be configured via CLI flags or `.env` file (see [`.env.example`
 | Flag | Env Variable | Default | Description |
 |------|--------------|---------|-------------|
 | `--analysis` | `ANALYSIS_STRATEGY` | `adaptive` | Analysis strategy: `adaptive` or `full` |
-| `--ai-planner` | `AI_PLANNER` | `false` | Enable external AI planner (Jev) for candidate triage |
+| `--ai-planner` | `AI_PLANNER` | `false` | Enable the external System-One AI planner for candidate triage |
 | `--ai-classifier` | `AI_CLASSIFIER` | `false` | Enable external AI finding classifier |
 | `--ai-mode` | `AI_MODE` | `optional` | AI failure handling: `optional`, `required`, or `disabled` |
 | `--verbose-analysis` | | `false` | Display detailed candidate planning telemetry in terminal |
@@ -118,14 +118,14 @@ All settings can be configured via CLI flags or `.env` file (see [`.env.example`
 
 | Flag | Env Variable | Default | Description |
 |------|--------------|---------|-------------|
-| `--classifier-provider` | `CLASSIFIER_PROVIDER` | `heuristic` | Provider: `heuristic`, `jev`, `kev`, `rlcd`, `openrouter` |
+| `--classifier-provider` | `CLASSIFIER_PROVIDER` | `heuristic` | Provider: `heuristic`, `system-one`, `rlcd`, or custom; `jev` is a deprecated alias for `system-one` |
 | `--classifier-endpoint` | `RLCD_API_URL` or `KEV_API_URL` | `""` | Remote classifier endpoint URL |
 | `--classifier-model` | `RLCD_MODEL` or `KEV_MODEL` | `heuristic` | Model identifier |
 | `--classifier-api-key` | `RLCD_API_KEY` or `KEV_API_KEY` | `""` | API key / Bearer token |
 | `--classifier-timeout` | | `5s` | Classifier request timeout in seconds |
 | `--log-level` | `HAYSTACK_LOG_LEVEL` | `warn` | Diagnostic logging verbosity: `debug`, `info`, `warn`, or `error` (logs go to stderr) |
-| `--openrouter-api-key` | `OPENROUTER_API_KEY` | `""` | OpenRouter API Key for Jev / System-One |
-| `--system-one-model` | `SYSTEM_ONE_MODEL` | `~typesafe/jev-latest` | Jev decision model for decisions API |
+| `--openrouter-api-key` | `OPENROUTER_API_KEY` | `""` | OpenRouter API key for the System-One classifier and planner |
+| `--system-one-model` | `SYSTEM_ONE_MODEL` | `~typesafe/jev-latest` | System-One decision model for the decisions API |
 | `--openrouter-model` | `OPENROUTER_MODEL` | `openrouter/free` | LLM model for vulnerability explanations |
 | `--openrouter-base-url` | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL |
 
@@ -261,8 +261,14 @@ scanner . --verbose-analysis
 # Scan only code changed in git diff
 scanner . --diff HEAD~1
 
-# Run with external AI planner (Jev)
+# Run with the external System-One AI planner
 scanner . --ai-planner
+
+# Use the canonical System-One classifier provider
+scanner . --classifier-provider system-one
+
+# Legacy alias; normalized internally to system-one
+scanner . --classifier-provider jev
 
 # Scan with JSON output format
 scanner . --format json
@@ -276,7 +282,7 @@ scanner . --format sarif > results.sarif
 
 ### Scanner cache
 
-Haystack caches complete scan results by default. Cache keys include source content and paths, scan options, scanner and rule versions, parser/runtime identity, and relevant AI provider/model settings. Successful planner and remote classifier responses are also cached independently, so they can be reused when a final scan result must be recomputed. Cache hits reuse results without changing scanner security semantics; cache misses run the normal analysis.
+Haystack caches complete scan results by default. Cache keys include source content and paths, scan options, scanner and rule versions, parser/runtime identity, and relevant AI provider/model settings. Successful planner and remote classifier responses are also cached independently, so they can be reused when a final scan result must be recomputed. Provider identities are canonicalized for cache purposes, so the deprecated `jev` provider alias shares the `system-one` identity. Cache hits reuse results without changing scanner security semantics; cache misses run the normal analysis.
 
 Use `--no-cache` to force a fresh scan and bypass both final-result and AI cache reads and writes:
 
@@ -295,7 +301,7 @@ Run with `--verbose` or `--verbose-analysis` to see cache hit/miss diagnostics o
 
 For CI, persistent runners can reuse their local cache. Ephemeral runners need the CI system to save and restore `SCANNER_CACHE_DIR` between jobs for cross-job reuse. The scanner continues to work when the cache is empty, unavailable, or removed.
 
-When changing scanner behavior, update `internal/buildinfo.ScannerVersion`; when changing default security rules, update `internal/rules.RulesVersion`. Update the AI prompt or schema version constants when their respective contracts change. These version identities invalidate affected entries without requiring old cache files to be deleted.
+When changing scanner behavior, update `internal/buildinfo.ScannerVersion`; when changing default security rules, update `internal/rules.RulesVersion`. Update the AI prompt or schema version constants when their respective contracts change. The current planner prompt identity is `system-one-planner-v1`. These version identities invalidate affected entries without requiring old cache files to be deleted.
 
 ### Exit Codes
 
@@ -340,11 +346,11 @@ golangci-lint run ./...
 │   ├── index/                 # Program index constructed from ASTs
 │   ├── candidates/            # Candidate discovery & cost estimation
 │   ├── planning/              # Deterministic planner, candidate plans & budgets
-│   ├── ai/                    # Jev AI planner client & OpenRouter decisions integration
+│   ├── ai/                    # System-One AI planner client
 │   ├── analyzer/              # AST parsers & language analyzers (Go, Python)
 │   ├── flow/                  # Bounded intra-procedural data-flow tracking
 │   ├── rules/                 # Deterministic security rules (CWE-78, 89, 22, 798, 502)
-│   ├── classifier/            # Post-analysis classifier models (Jev, Kev, RLCD)
+│   ├── classifier/            # Provider-agnostic classifier interface and adapters
 │   ├── findings/              # Finding models, analysis metadata & normalization
 │   ├── issues/                # Issue provider abstraction & GitHub provider
 │   ├── mcp/                   # Model Context Protocol JSON-RPC 2.0 stdio server
@@ -353,6 +359,6 @@ golangci-lint run ./...
 │   └── scanner/               # Scan orchestrator, diff scanner, and discovery
 ├── testdata/                  # Vulnerable & safe test fixtures (Go, Python)
 ├── benchmarks/                # Precision, recall, and evaluation benchmarks
-├── agents/                    # Architecture and design plan specifications
+├── agent_plans/               # Architecture and design plan specifications
 └── README.md
 ```
