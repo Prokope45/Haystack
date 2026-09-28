@@ -425,10 +425,11 @@ func (o *Orchestrator) ScanRequest(ctx context.Context, req ScanRequest) (*ScanR
 	var analyzedCount, skippedCount, shallowCount, mediumCount, deepCount int
 	for _, p := range analysisPlan.Candidates {
 		directives[p.CandidateID] = analyzer.AnalysisDirectives{
-			Analyze:     p.Analyze,
-			Mode:        string(p.Mode),
-			MaxDepth:    p.Depth,
-			CandidateID: p.CandidateID,
+			Analyze:                 p.Analyze,
+			Mode:                    string(p.Mode),
+			MaxDepth:                p.Depth,
+			MaxInterproceduralDepth: o.cfg.MaxInterproceduralDepth,
+			CandidateID:             p.CandidateID,
 		}
 
 		metaMap[p.CandidateID] = &findings.AnalysisMetadata{
@@ -616,10 +617,11 @@ func (o *Orchestrator) ScanCode(ctx context.Context, code []byte, language strin
 	var analyzedCount, skippedCount, shallowCount, mediumCount, deepCount int
 	for _, p := range plan.Candidates {
 		directives[p.CandidateID] = analyzer.AnalysisDirectives{
-			Analyze:     p.Analyze,
-			Mode:        string(p.Mode),
-			MaxDepth:    p.Depth,
-			CandidateID: p.CandidateID,
+			Analyze:                 p.Analyze,
+			Mode:                    string(p.Mode),
+			MaxDepth:                p.Depth,
+			MaxInterproceduralDepth: o.cfg.MaxInterproceduralDepth,
+			CandidateID:             p.CandidateID,
 		}
 
 		metaMap[p.CandidateID] = &findings.AnalysisMetadata{

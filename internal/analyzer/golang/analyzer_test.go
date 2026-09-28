@@ -44,6 +44,169 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func TestGoAnalyzerInterproceduralArgumentFlow(t *testing.T) {
+	code := `package main
+import (
+	"net/http"
+	"os/exec"
+)
+func handler(w http.ResponseWriter, r *http.Request) {
+	command := r.URL.Query().Get("cmd")
+	dispatch(command)
+}
+func dispatch(command string) { execute(command) }
+func execute(script string) { exec.Command("sh", "-c", script).Run() }
+`
+	evidences, err := NewGoAnalyzer().Analyze(context.Background(), []byte(code), "main.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evidences) != 1 {
+		t.Fatalf("expected one cross-function evidence, got %d: %#v", len(evidences), evidences)
+	}
+	if evidences[0].Source.Type != analyzer.SourceHTTPInput || evidences[0].Sink.Type != analyzer.SinkShell {
+		t.Fatalf("unexpected source/sink: %#v", evidences[0])
+	}
+	if !hasOperation(evidences[0].Operations, "argument_passing") {
+		t.Fatalf("expected argument-passing operations, got %#v", evidences[0].Operations)
+	}
+}
+
+func TestGoAnalyzerInterproceduralReturnFlow(t *testing.T) {
+	code := `package main
+import (
+	"net/http"
+	"os/exec"
+)
+func handler(w http.ResponseWriter, r *http.Request) {
+	command := readCommand(r)
+	exec.Command("sh", "-c", command).Run()
+}
+func readCommand(r *http.Request) string { return r.URL.Query().Get("cmd") }
+`
+	evidences, err := NewGoAnalyzer().Analyze(context.Background(), []byte(code), "main.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evidences) != 1 {
+		t.Fatalf("expected one cross-function evidence, got %d: %#v", len(evidences), evidences)
+	}
+	if !hasOperation(evidences[0].Operations, "return_value") {
+		t.Fatalf("expected return-value operation, got %#v", evidences[0].Operations)
+	}
+}
+
+func TestGoAnalyzerInterproceduralMethodCall(t *testing.T) {
+	code := `package main
+import (
+	"net/http"
+	"os/exec"
+)
+type Executor struct{}
+func handler(w http.ResponseWriter, r *http.Request) {
+	command := r.URL.Query().Get("cmd")
+	executor := Executor{}
+	executor.execute(command)
+}
+func (e Executor) execute(script string) { exec.Command("sh", "-c", script).Run() }
+`
+	evidences, err := NewGoAnalyzer().Analyze(context.Background(), []byte(code), "main.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evidences) != 1 {
+		t.Fatalf("expected one method-flow evidence, got %d: %#v", len(evidences), evidences)
+	}
+	if !hasOperation(evidences[0].Operations, "argument_passing") {
+		t.Fatalf("expected method argument-passing operation, got %#v", evidences[0].Operations)
+	}
+}
+
+func TestGoAnalyzerInterproceduralStructFieldArgument(t *testing.T) {
+	code := `package main
+import (
+	"net/http"
+	"os/exec"
+)
+type Task struct { Script string }
+func handler(w http.ResponseWriter, r *http.Request) {
+	command := r.URL.Query().Get("cmd")
+	var task Task
+	task.Script = command
+	execute(task)
+}
+func execute(task Task) { launch(task.Script) }
+func launch(script string) { exec.Command("sh", "-c", script).Run() }
+`
+	evidences, err := NewGoAnalyzer().Analyze(context.Background(), []byte(code), "main.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evidences) != 1 {
+		t.Fatalf("expected one struct-field flow evidence, got %d: %#v", len(evidences), evidences)
+	}
+	if !hasOperation(evidences[0].Operations, "argument_passing") {
+		t.Fatalf("expected argument-passing operation, got %#v", evidences[0].Operations)
+	}
+}
+
+func TestGoAnalyzerInterproceduralDepthLimit(t *testing.T) {
+	code := `package main
+import (
+	"net/http"
+	"os/exec"
+)
+func handler(w http.ResponseWriter, r *http.Request) { dispatch(r.URL.Query().Get("cmd")) }
+func dispatch(command string) { execute(command) }
+func execute(script string) { exec.Command("sh", "-c", script).Run() }
+`
+	ga := NewGoAnalyzer()
+	ga.SetDirectives(map[string]analyzer.AnalysisDirectives{
+		"candidate": {Analyze: true, MaxInterproceduralDepth: 1},
+	})
+	evidences, err := ga.Analyze(context.Background(), []byte(code), "main.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evidences) != 0 {
+		t.Fatalf("expected no evidence past interprocedural depth limit, got %#v", evidences)
+	}
+}
+
+func TestGoAnalyzerInterproceduralDoesNotTaintUnrelatedCalls(t *testing.T) {
+	code := `package main
+import (
+	"net/http"
+	"os/exec"
+)
+func handler(w http.ResponseWriter, r *http.Request) {
+	command := r.URL.Query().Get("cmd")
+	execute("fixed")
+	execute(command)
+}
+func execute(script string) { exec.Command("sh", "-c", script).Run() }
+`
+	evidences, err := NewGoAnalyzer().Analyze(context.Background(), []byte(code), "main.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evidences) != 1 {
+		t.Fatalf("expected only the tainted callsite to produce evidence, got %d: %#v", len(evidences), evidences)
+	}
+	if evidences[0].Line != 11 {
+		t.Fatalf("expected sink on tainted call line 11, got line %d", evidences[0].Line)
+	}
+}
+
+func hasOperation(operations []analyzer.Operation, kind string) bool {
+	for _, operation := range operations {
+		if operation.Type == kind {
+			return true
+		}
+	}
+	return false
+}
+
 func TestGoAnalyzerSafeCommand(t *testing.T) {
 	code := `
 package main

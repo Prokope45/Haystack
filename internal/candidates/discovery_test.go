@@ -78,6 +78,65 @@ func multiHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func TestDiscoverCandidatesLinksGoSourcesAcrossFunctions(t *testing.T) {
+	code := `package main
+import (
+	"net/http"
+	"os/exec"
+)
+func handler(w http.ResponseWriter, r *http.Request) {
+	command := r.URL.Query().Get("cmd")
+	dispatch(command)
+}
+func dispatch(value string) { execute(value) }
+func execute(script string) { exec.Command("sh", "-c", script).Run() }
+`
+	indexer := index.NewIndexer()
+	if err := indexer.IndexFile("main.go", "main.go", []byte(code)); err != nil {
+		t.Fatalf("failed to index file: %v", err)
+	}
+	candidates := DiscoverCandidates(indexer.Index())
+	if len(candidates) != 1 {
+		t.Fatalf("expected one sink candidate, got %d", len(candidates))
+	}
+	for _, source := range candidates[0].Sources {
+		if source.Type == analyzer.SourceHTTPInput {
+			return
+		}
+	}
+	t.Fatalf("expected the sink candidate to include the upstream HTTP source: %#v", candidates[0].Sources)
+}
+
+func TestDiscoverCandidatesLinksPythonSourcesAcrossFunctions(t *testing.T) {
+	code := `from flask import request
+import subprocess
+
+def handler():
+    command = request.args.get("cmd")
+    dispatch(command)
+
+def dispatch(value):
+    execute(value)
+
+def execute(script):
+    subprocess.run(script, shell=True)
+`
+	indexer := index.NewIndexer()
+	if err := indexer.IndexFile("app.py", "app.py", []byte(code)); err != nil {
+		t.Fatalf("failed to index file: %v", err)
+	}
+	candidates := DiscoverCandidates(indexer.Index())
+	if len(candidates) != 1 {
+		t.Fatalf("expected one sink candidate, got %d", len(candidates))
+	}
+	for _, source := range candidates[0].Sources {
+		if source.Type == analyzer.SourceHTTPInput {
+			return
+		}
+	}
+	t.Fatalf("expected the sink candidate to include the upstream HTTP source: %#v", candidates[0].Sources)
+}
+
 func TestEstimateCost(t *testing.T) {
 	// Case 1: Close proximity source + Shell sink (dist <= 5)
 	sourcesClose := []SourceRef{

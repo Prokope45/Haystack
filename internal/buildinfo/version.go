@@ -3,7 +3,7 @@ package buildinfo
 
 // ScannerVersion must be updated when scanner behavior changes in a way that
 // cannot be captured by the rule, parser, or configuration identities.
-const ScannerVersion = "0.1.0-poc"
+const ScannerVersion = "0.1.1-poc"
 
 // PlannerPromptVersion identifies the AI planner prompt and request contract.
 const PlannerPromptVersion = "jev-planner-v1"

@@ -1,3 +1,4 @@
+// build+ benchmarks
 package benchmarks
 
 import (

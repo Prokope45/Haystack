@@ -205,6 +205,7 @@ func (b *Indexer) indexGo(filePath string, relPath string, content []byte) error
 var (
 	pyDefRegex    = regexp.MustCompile(`(?m)^\s*def\s+([a-zA-Z0-9_]+)\s*\((.*?)\):`)
 	pyImportRegex = regexp.MustCompile(`(?m)^\s*(?:import\s+([a-zA-Z0-9_., ]+)|from\s+([a-zA-Z0-9_.]+)\s+import)`)
+	pyCallRegex   = regexp.MustCompile(`\b([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\(`)
 )
 
 func (b *Indexer) indexPython(filePath string, relPath string, content []byte) error {
@@ -251,6 +252,17 @@ func (b *Indexer) indexPython(filePath string, relPath string, content []byte) e
 				b.index.Imports = append(b.index.Imports, ImportInfo{
 					File: displayFile,
 					Path: strings.TrimSpace(imp),
+				})
+			}
+		}
+
+		// 2a. Record lightweight call edges for same-file candidate linking.
+		if !strings.HasPrefix(trimmed, "def ") && !strings.HasPrefix(trimmed, "async def ") {
+			for _, matches := range pyCallRegex.FindAllStringSubmatch(line, -1) {
+				callee := matches[1]
+				b.index.Calls = append(b.index.Calls, CallInfo{
+					File: displayFile, Function: currentFunc, Caller: currentFunc,
+					Callee: callee, Line: lineNum, Column: strings.Index(line, callee) + 1,
 				})
 			}
 		}

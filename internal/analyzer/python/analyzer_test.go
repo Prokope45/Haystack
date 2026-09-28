@@ -44,6 +44,126 @@ def run_it():
 	}
 }
 
+func TestPythonAnalyzerInterproceduralArgumentFlow(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found in PATH")
+	}
+	code := `from flask import request
+import subprocess
+
+def handler():
+    command = request.args.get("cmd")
+    dispatch(command)
+
+def dispatch(value):
+    execute(value)
+
+def execute(script):
+    subprocess.run(script, shell=True)
+`
+	evidences, err := NewPythonAnalyzer().Analyze(context.Background(), []byte(code), "app.py")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evidences) != 1 {
+		t.Fatalf("expected one cross-function evidence, got %d: %#v", len(evidences), evidences)
+	}
+	if evidences[0].Source.Type != analyzer.SourceHTTPInput || evidences[0].Sink.Type != analyzer.SinkShell {
+		t.Fatalf("unexpected source/sink: %#v", evidences[0])
+	}
+	if !hasPythonOperation(evidences[0].Operations, "argument_passing") {
+		t.Fatalf("expected argument-passing operation, got %#v", evidences[0].Operations)
+	}
+}
+
+func TestPythonAnalyzerInterproceduralReturnFlow(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found in PATH")
+	}
+	code := `from flask import request
+import subprocess
+
+def handler():
+    command = read_command()
+    subprocess.run(command, shell=True)
+
+def read_command():
+    return request.args.get("cmd")
+`
+	evidences, err := NewPythonAnalyzer().Analyze(context.Background(), []byte(code), "app.py")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evidences) != 1 {
+		t.Fatalf("expected one cross-function evidence, got %d: %#v", len(evidences), evidences)
+	}
+	if !hasPythonOperation(evidences[0].Operations, "return_value") {
+		t.Fatalf("expected return-value operation, got %#v", evidences[0].Operations)
+	}
+}
+
+func TestPythonAnalyzerInterproceduralDepthLimit(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found in PATH")
+	}
+	code := `from flask import request
+import subprocess
+
+def handler():
+    dispatch(request.args.get("cmd"))
+
+def dispatch(value):
+    execute(value)
+
+def execute(script):
+    subprocess.run(script, shell=True)
+`
+	pa := NewPythonAnalyzer()
+	pa.SetDirectives(map[string]analyzer.AnalysisDirectives{
+		"candidate": {Analyze: true, MaxInterproceduralDepth: 1},
+	})
+	evidences, err := pa.Analyze(context.Background(), []byte(code), "app.py")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evidences) != 0 {
+		t.Fatalf("expected no evidence past interprocedural depth limit, got %#v", evidences)
+	}
+}
+
+func TestPythonAnalyzerInterproceduralDoesNotTaintUnrelatedCalls(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found in PATH")
+	}
+	code := `from flask import request
+import subprocess
+
+def handler():
+    command = request.args.get("cmd")
+    execute("fixed")
+    execute(command)
+
+def execute(script):
+    subprocess.run(script, shell=True)
+`
+	evidences, err := NewPythonAnalyzer().Analyze(context.Background(), []byte(code), "app.py")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evidences) != 1 {
+		t.Fatalf("expected only the tainted callsite to produce evidence, got %d: %#v", len(evidences), evidences)
+	}
+}
+
+func hasPythonOperation(operations []analyzer.Operation, kind string) bool {
+	for _, operation := range operations {
+		if operation.Type == kind {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPythonAnalyzerSafeCommand(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not found in PATH")

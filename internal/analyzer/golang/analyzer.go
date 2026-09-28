@@ -82,25 +82,6 @@ func (ga *GoAnalyzer) Analyze(ctx context.Context, source []byte, filePath strin
 
 		ft := flow.NewBoundedFlowTracker(maxDepth)
 
-		// Track function parameters if they are HTTP handlers or general inputs
-		if fn.Type.Params != nil {
-			for _, field := range fn.Type.Params.List {
-				typeStr := exprToString(field.Type)
-				if strings.Contains(typeStr, "http.Request") {
-					for _, name := range field.Names {
-						// Marker for request object
-						ft.IntroduceSource(name.Name, analyzer.Source{
-							Type:   analyzer.SourceHTTPInput,
-							Name:   name.Name,
-							Line:   fset.Position(name.Pos()).Line,
-							Column: fset.Position(name.Pos()).Column,
-							Detail: "HTTP Request parameter",
-						})
-					}
-				}
-			}
-		}
-
 		var funcEvidences []analyzer.Evidence
 
 		// Walk through statements in the function body
@@ -134,7 +115,31 @@ func (ga *GoAnalyzer) Analyze(ctx context.Context, source []byte, filePath strin
 		evidences = append(evidences, funcEvidences...)
 	}
 
+	interproceduralEvidences := analyzeGoInterprocedural(ctx, fset, node, filePath, ga.directives)
+	for _, interproceduralEvidence := range interproceduralEvidences {
+		matched := false
+		for i := range evidences {
+			if sameEvidenceFlow(evidences[i], interproceduralEvidence) {
+				if len(interproceduralEvidence.Operations) > len(evidences[i].Operations) {
+					evidences[i] = interproceduralEvidence
+				}
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			evidences = append(evidences, interproceduralEvidence)
+		}
+	}
+
 	return evidences, nil
+}
+
+func sameEvidenceFlow(left, right analyzer.Evidence) bool {
+	return left.Source.Type == right.Source.Type && left.Source.Name == right.Source.Name &&
+		left.Source.Line == right.Source.Line && left.Source.Column == right.Source.Column &&
+		left.Sink.Type == right.Sink.Type && left.Sink.Name == right.Sink.Name &&
+		left.Sink.Line == right.Sink.Line && left.Sink.Column == right.Sink.Column
 }
 
 func sanitizeIdentifier(s string) string {
@@ -173,7 +178,7 @@ func (ga *GoAnalyzer) handleAssignStmt(
 		// 3. Check for Hardcoded Secret pattern in assignment
 		if lhsName != "" && secretKeyRegex.MatchString(lhsName) {
 			if lit, ok := rhs.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				val := strings.Trim(lit.Value, `"'` + "`")
+				val := strings.Trim(lit.Value, "'\"`")
 				if len(val) >= 6 && !strings.Contains(val, " ") && !strings.Contains(val, "%") {
 					pos := fset.Position(stmt.Pos())
 					*evidences = append(*evidences, analyzer.Evidence{

@@ -69,10 +69,11 @@ type Evidence struct {
 
 // AnalysisDirectives provides execution constraints (mode, depth, candidate association) to an analyzer.
 type AnalysisDirectives struct {
-	Analyze     bool   `json:"analyze"`
-	Mode        string `json:"mode"`
-	MaxDepth    int    `json:"max_depth"`
-	CandidateID string `json:"candidate_id"`
+	Analyze                 bool   `json:"analyze"`
+	Mode                    string `json:"mode"`
+	MaxDepth                int    `json:"max_depth"`
+	MaxInterproceduralDepth int    `json:"max_interprocedural_depth,omitempty"`
+	CandidateID             string `json:"candidate_id"`
 }
 
 // Analyzer is the common interface implemented by language-specific static analyzers.

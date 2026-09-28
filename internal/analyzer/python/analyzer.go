@@ -42,8 +42,15 @@ func (pa *PythonAnalyzer) Supports(path string) bool {
 
 func (pa *PythonAnalyzer) Analyze(ctx context.Context, source []byte, filePath string) ([]analyzer.Evidence, error) {
 	baseNameSanitized := sanitizePyIdentifier(filepath.Base(filePath))
+	maxInterproceduralDepth := 5
 
 	if len(pa.directives) > 0 {
+		for _, directive := range pa.directives {
+			if directive.MaxInterproceduralDepth > 0 {
+				maxInterproceduralDepth = directive.MaxInterproceduralDepth
+				break
+			}
+		}
 		hasActive := false
 		for k, d := range pa.directives {
 			if strings.Contains(k, baseNameSanitized) {
@@ -66,7 +73,7 @@ func (pa *PythonAnalyzer) Analyze(ctx context.Context, source []byte, filePath s
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, pa.PythonBinary, "-c", bridgeScript, filePath)
+	cmd := exec.CommandContext(ctx, pa.PythonBinary, "-c", bridgeScript, filePath, fmt.Sprint(maxInterproceduralDepth))
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -101,11 +108,22 @@ func (pa *PythonAnalyzer) Analyze(ctx context.Context, source []byte, filePath s
 		rawEvidences[i].Mode = "deep"
 
 		if len(pa.directives) > 0 {
+			matched := false
 			for k, d := range pa.directives {
-				if strings.Contains(k, baseNameSanitized) {
+				if strings.Contains(k, baseNameSanitized) && strings.HasSuffix(d.CandidateID, fmt.Sprintf("-%d", rawEvidences[i].Line)) {
 					rawEvidences[i].CandidateID = d.CandidateID
 					rawEvidences[i].Mode = d.Mode
+					matched = true
 					break
+				}
+			}
+			if !matched {
+				for k, d := range pa.directives {
+					if strings.Contains(k, baseNameSanitized) {
+						rawEvidences[i].CandidateID = d.CandidateID
+						rawEvidences[i].Mode = d.Mode
+						break
+					}
 				}
 			}
 		}

@@ -3,6 +3,7 @@ package candidates
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"haystack/internal/analyzer"
@@ -50,6 +51,11 @@ func DiscoverCandidates(idx *index.ProgramIndex) []AnalysisCandidate {
 						Column: src.Source.Column,
 						Detail: src.Source.Detail,
 					})
+				}
+				for _, source := range linkedSources(idx, filePath, fn.Name, 5) {
+					if !containsSourceRef(sourceRefs, source) {
+						sourceRefs = append(sourceRefs, source)
+					}
 				}
 
 				// If no direct sources were discovered in the function, check parameters
@@ -123,6 +129,89 @@ func DiscoverCandidates(idx *index.ProgramIndex) []AnalysisCandidate {
 	}
 
 	return candidates
+}
+
+func linkedSources(idx *index.ProgramIndex, file, sinkFunction string, maxDepth int) []SourceRef {
+	functions := make(map[string]bool)
+	for _, function := range idx.Functions {
+		if function.File == file {
+			functions[function.Name] = true
+		}
+	}
+	if !functions[sinkFunction] || maxDepth <= 0 {
+		return nil
+	}
+
+	neighbors := make(map[string]map[string]bool)
+	for _, call := range idx.Calls {
+		if call.File != file {
+			continue
+		}
+		caller := call.Function
+		if caller == "" {
+			caller = call.Caller
+		}
+		callee := call.Callee
+		if dot := strings.LastIndex(callee, "."); dot >= 0 {
+			callee = callee[dot+1:]
+		}
+		if !functions[caller] || !functions[callee] {
+			continue
+		}
+		if neighbors[caller] == nil {
+			neighbors[caller] = make(map[string]bool)
+		}
+		if neighbors[callee] == nil {
+			neighbors[callee] = make(map[string]bool)
+		}
+		neighbors[caller][callee] = true
+		neighbors[callee][caller] = true
+	}
+
+	type visit struct {
+		function string
+		depth    int
+	}
+	queue := []visit{{function: sinkFunction}}
+	visited := map[string]bool{sinkFunction: true}
+	var result []SourceRef
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, source := range idx.FindSourcesInFunction(file, current.function) {
+			ref := SourceRef{
+				Type: source.Source.Type, Name: source.Source.Name,
+				Line: source.Source.Line, Column: source.Source.Column, Detail: source.Source.Detail,
+			}
+			if !containsSourceRef(result, ref) {
+				result = append(result, ref)
+			}
+		}
+		if current.depth >= maxDepth {
+			continue
+		}
+		var next []string
+		for neighbor := range neighbors[current.function] {
+			if !visited[neighbor] {
+				next = append(next, neighbor)
+			}
+		}
+		sort.Strings(next)
+		for _, neighbor := range next {
+			visited[neighbor] = true
+			queue = append(queue, visit{function: neighbor, depth: current.depth + 1})
+		}
+	}
+	return result
+}
+
+func containsSourceRef(sources []SourceRef, target SourceRef) bool {
+	for _, source := range sources {
+		if source.Type == target.Type && source.Name == target.Name && source.Line == target.Line && source.Column == target.Column {
+			return true
+		}
+	}
+	return false
 }
 
 func mapSinkToVulnClass(sinkType analyzer.SinkType) string {

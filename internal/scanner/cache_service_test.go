@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -97,6 +98,84 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 	if forced.Cache.FinalResult != "BYPASS" || counted.calls.Load() != 3 {
 		t.Fatalf("no-cache scan cache=%q analyzer calls=%d; want BYPASS and a fresh analysis", forced.Cache.FinalResult, counted.calls.Load())
+	}
+}
+
+func TestScannerServiceFindsInterproceduralGoFlowInCodeSnippet(t *testing.T) {
+	service := NewScannerWithCache(cacheTestConfig(), nil)
+	code := []byte(`package main
+import (
+	"fmt"
+	"net/http"
+	"os/exec"
+	"strings"
+)
+type Task struct { Script string }
+func handler(w http.ResponseWriter, r *http.Request) {
+	raw := requestCommand(r)
+	task := buildTask(raw)
+	_ = dispatchTask(task)
+}
+func requestCommand(r *http.Request) string { return r.URL.Query().Get("cmd") }
+func normalizeCommand(value string) string { return strings.TrimSpace(fmt.Sprintf("%s", value)) }
+func buildTask(value string) Task { return Task{Script: normalizeCommand(value)} }
+func dispatchTask(task Task) error { return runShell(task.Script) }
+func runShell(script string) error { return exec.Command("sh", "-c", script).Run() }
+`)
+	evidence, err := golang.NewGoAnalyzer().Analyze(context.Background(), code, "main.go")
+	if err != nil || len(evidence) == 0 {
+		t.Fatalf("direct Go analyzer evidence=%#v err=%v", evidence, err)
+	}
+	result, err := service.ScanCode(context.Background(), ScanCodeRequest{
+		Code: code, Language: "go", Filename: "main.go",
+	})
+	if err != nil {
+		t.Fatalf("interprocedural scan failed: %v", err)
+	}
+	if len(result.Findings) != 1 {
+		t.Fatalf("expected one cross-function finding, got %d: %#v", len(result.Findings), result.Findings)
+	}
+	finding := result.Findings[0]
+	if finding.RuleID != "RULE-CMD-001" {
+		t.Fatalf("expected command-injection rule, got %q", finding.RuleID)
+	}
+	if finding.AnalysisMetadata == nil || !finding.AnalysisMetadata.Interprocedural {
+		t.Fatalf("expected interprocedural analysis metadata, got %#v", finding.AnalysisMetadata)
+	}
+}
+
+func TestScannerServiceFindsInterproceduralPythonFlowInCodeSnippet(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found in PATH")
+	}
+	service := NewScannerWithCache(cacheTestConfig(), nil)
+	code := []byte(`from flask import request
+import subprocess
+
+def handler():
+    command = read_command()
+    dispatch(command)
+
+def read_command():
+    return request.args.get("cmd")
+
+def dispatch(value):
+    execute(value)
+
+def execute(script):
+    subprocess.run(script, shell=True)
+`)
+	result, err := service.ScanCode(context.Background(), ScanCodeRequest{
+		Code: code, Language: "python", Filename: "app.py",
+	})
+	if err != nil {
+		t.Fatalf("interprocedural scan failed: %v", err)
+	}
+	if len(result.Findings) != 1 {
+		t.Fatalf("expected one cross-function finding, got %d: %#v", len(result.Findings), result.Findings)
+	}
+	if result.Findings[0].AnalysisMetadata == nil || !result.Findings[0].AnalysisMetadata.Interprocedural {
+		t.Fatalf("expected interprocedural analysis metadata, got %#v", result.Findings[0].AnalysisMetadata)
 	}
 }
 

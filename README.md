@@ -85,6 +85,8 @@ Haystack scales analysis computational cost through explicit analysis strategies
 - **`medium`**: Bounded local function data-flow analysis (up to 4 propagation hops).
 - **`deep`**: Unconstrained taint flow analysis tracking full variable assignments, string formatting, and argument passing.
 
+For supplied Go and Python snippets, deep analysis also follows statically resolvable calls between functions in that source file, propagating tainted arguments and return values up to the configured interprocedural depth (default: 5 calls).
+
 ### AI Dependency Modes (`--ai-mode`)
 
 - **`optional` (default)**: Uses AI services when available. If the external AI service times out or fails, Haystack gracefully falls back to the deterministic planner without failing the scan.
