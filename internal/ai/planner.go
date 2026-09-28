@@ -105,21 +105,21 @@ func NewSystemOnePlanner(opts PlannerOptions) *SystemOnePlanner {
 	}
 }
 
-func (jp *SystemOnePlanner) Name() string {
+func (sop *SystemOnePlanner) Name() string {
 	return "system-one"
 }
 
 // CacheIdentity returns the non-secret provider details that affect planner
 // output. Credentials are intentionally excluded.
-func (jp *SystemOnePlanner) CacheIdentity() (provider, model, endpoint string) {
-	return "system-one", jp.model, jp.decisionsURL
+func (sop *SystemOnePlanner) CacheIdentity() (provider, model, endpoint string) {
+	return "system-one", sop.model, sop.decisionsURL
 }
 
 // Telemetry returns recorded planning request count and latency.
-func (jp *SystemOnePlanner) Telemetry() (int, time.Duration) {
-	jp.mu.Lock()
-	defer jp.mu.Unlock()
-	return jp.planningCalls, jp.planningLatency
+func (sop *SystemOnePlanner) Telemetry() (int, time.Duration) {
+	sop.mu.Lock()
+	defer sop.mu.Unlock()
+	return sop.planningCalls, sop.planningLatency
 }
 
 type systemOneDecisionRequest struct {
@@ -154,12 +154,12 @@ type systemOneAnswer struct {
 }
 
 // Plan consults System-One to decide priority and analysis mode for each candidate.
-func (jp *SystemOnePlanner) Plan(ctx context.Context, cands []candidates.AnalysisCandidate, budget planning.AnalysisBudget) (planning.AnalysisPlan, error) {
-	if jp.mode == "disabled" || jp.apiKey == "" {
-		if jp.fallback != nil {
-			return jp.fallback.Plan(ctx, cands, budget)
+func (sop *SystemOnePlanner) Plan(ctx context.Context, cands []candidates.AnalysisCandidate, budget planning.AnalysisBudget) (planning.AnalysisPlan, error) {
+	if sop.mode == "disabled" || sop.apiKey == "" {
+		if sop.fallback != nil {
+			return sop.fallback.Plan(ctx, cands, budget)
 		}
-		if jp.mode == "required" {
+		if sop.mode == "required" {
 			return planning.AnalysisPlan{}, fmt.Errorf("AI planner is required but not configured (missing API key or disabled)")
 		}
 		return planning.NewDeterministicPlanner().Plan(ctx, cands, budget)
@@ -176,22 +176,22 @@ func (jp *SystemOnePlanner) Plan(ctx context.Context, cands []candidates.Analysi
 
 	start := time.Now()
 	for _, c := range cands {
-		plan, err := jp.planSingleCandidate(ctx, c, budget)
+		plan, err := sop.planSingleCandidate(ctx, c, budget)
 		if err != nil {
-			if jp.mode == "required" {
+			if sop.mode == "required" {
 				return planning.AnalysisPlan{}, fmt.Errorf("System-One planning failed on candidate %s: %w", c.ID, err)
 			}
 			// In optional mode, fallback to deterministic planning for this batch
-			return jp.fallback.Plan(ctx, cands, budget)
+			return sop.fallback.Plan(ctx, cands, budget)
 		}
 		plans = append(plans, plan)
 	}
 
 	elapsed := time.Since(start)
-	jp.mu.Lock()
-	jp.planningCalls += len(cands)
-	jp.planningLatency += elapsed
-	jp.mu.Unlock()
+	sop.mu.Lock()
+	sop.planningCalls += len(cands)
+	sop.planningLatency += elapsed
+	sop.mu.Unlock()
 
 	// Enforce budgets and bounds
 	sort.SliceStable(plans, func(i, j int) bool {
@@ -230,7 +230,7 @@ func (jp *SystemOnePlanner) Plan(ctx context.Context, cands []candidates.Analysi
 	}, nil
 }
 
-func (jp *SystemOnePlanner) planSingleCandidate(ctx context.Context, c candidates.AnalysisCandidate, budget planning.AnalysisBudget) (planning.CandidatePlan, error) {
+func (sop *SystemOnePlanner) planSingleCandidate(ctx context.Context, c candidates.AnalysisCandidate, budget planning.AnalysisBudget) (planning.CandidatePlan, error) {
 	state := formatCandidateState(c)
 
 	questions := map[string]systemOneQuestion{
@@ -254,7 +254,7 @@ func (jp *SystemOnePlanner) planSingleCandidate(ctx context.Context, c candidate
 	}
 
 	reqBody := systemOneDecisionRequest{
-		Model:     jp.model,
+		Model:     sop.model,
 		State:     state,
 		Questions: questions,
 	}
@@ -264,17 +264,17 @@ func (jp *SystemOnePlanner) planSingleCandidate(ctx context.Context, c candidate
 		return planning.CandidatePlan{}, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, jp.decisionsURL, bytes.NewReader(reqBytes))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, sop.decisionsURL, bytes.NewReader(reqBytes))
 	if err != nil {
 		return planning.CandidatePlan{}, err
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+jp.apiKey)
+	httpReq.Header.Set("Authorization", "Bearer "+sop.apiKey)
 	httpReq.Header.Set("HTTP-Referer", "https://github.com/haystack-security/haystack")
 	httpReq.Header.Set("X-Title", "Haystack Security Scanner")
 
-	resp, err := jp.httpClient.Do(httpReq)
+	resp, err := sop.httpClient.Do(httpReq)
 	if err != nil {
 		return planning.CandidatePlan{}, err
 	}
@@ -345,7 +345,7 @@ func (jp *SystemOnePlanner) planSingleCandidate(ctx context.Context, c candidate
 		VulnerabilityClasses: c.VulnerabilityClasses,
 		Reason:               reason,
 		PlannerProvider:      "system-one",
-		PlannerModel:         jp.model,
+		PlannerModel:         sop.model,
 	}, nil
 }
 

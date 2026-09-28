@@ -514,8 +514,8 @@ func (o *Orchestrator) ScanRequest(ctx context.Context, req ScanRequest) (*ScanR
 
 	var aiReqs int
 	var aiLat time.Duration
-	if jp, ok := planner.(interface{ Telemetry() (int, time.Duration) }); ok {
-		aiReqs, aiLat = jp.Telemetry()
+	if sop, ok := planner.(interface{ Telemetry() (int, time.Duration) }); ok {
+		aiReqs, aiLat = sop.Telemetry()
 	}
 
 	summary.Analysis = output.AnalysisStats{
@@ -671,8 +671,8 @@ func (o *Orchestrator) ScanCode(ctx context.Context, code []byte, language strin
 
 	var aiReqs int
 	var aiLat time.Duration
-	if jp, ok := o.planner.(interface{ Telemetry() (int, time.Duration) }); ok {
-		aiReqs, aiLat = jp.Telemetry()
+	if sop, ok := o.planner.(interface{ Telemetry() (int, time.Duration) }); ok {
+		aiReqs, aiLat = sop.Telemetry()
 	}
 
 	summary.Analysis = output.AnalysisStats{
