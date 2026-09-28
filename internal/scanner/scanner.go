@@ -14,7 +14,6 @@ import (
 	"haystack/internal/analyzer/python"
 	"haystack/internal/cache"
 	"haystack/internal/candidates"
-	"haystack/internal/classifier"
 	"haystack/internal/classifier/factory"
 	"haystack/internal/config"
 	"haystack/internal/findings"
@@ -23,65 +22,6 @@ import (
 	"haystack/internal/planning"
 	"haystack/internal/rules"
 )
-
-// ScanRequest specifies parameters for a scan operation per DESIGN_PLAN.md Section 28.
-type ScanRequest struct {
-	Paths         []string `json:"paths,omitempty"`
-	GitBase       string   `json:"git_base,omitempty"`
-	GitHead       string   `json:"git_head,omitempty"`
-	DiffRange     string   `json:"diff_range,omitempty"`
-	Languages     []string `json:"languages,omitempty"`
-	MinSeverity   string   `json:"min_severity,omitempty"`
-	MinConfidence float64  `json:"min_confidence,omitempty"`
-	Strategy      string   `json:"strategy,omitempty"`   // "adaptive" or "full"
-	AIPlanner     bool     `json:"ai_planner,omitempty"` // enable external AI planner
-	NoCache       bool     `json:"-"`                    // bypass all cache reads and writes
-}
-
-// ScanCodeRequest describes a scan of in-memory code or one file's contents.
-type ScanCodeRequest struct {
-	Code          []byte
-	Language      string
-	Filename      string
-	MinSeverity   string
-	MinConfidence float64
-	NoCache       bool
-}
-
-// ScanResult encapsulates findings and operational statistics.
-type ScanResult struct {
-	Findings []findings.Finding     `json:"findings"`
-	Summary  output.ScanSummary     `json:"summary"`
-	Plan     *planning.AnalysisPlan `json:"plan,omitempty"`
-	Cache    CacheStats             `json:"-"`
-}
-
-// CacheStats reports cache activity for one scanner-service invocation.
-type CacheStats struct {
-	FinalResult      string `json:"final_result,omitempty"`
-	PlannerHits      int    `json:"planner_hits,omitempty"`
-	PlannerMisses    int    `json:"planner_misses,omitempty"`
-	ClassifierHits   int    `json:"classifier_hits,omitempty"`
-	ClassifierMisses int    `json:"classifier_misses,omitempty"`
-}
-
-// Scanner defines the primary security scanner interface per DESIGN_PLAN.md Section 28.
-type Scanner interface {
-	Scan(ctx context.Context, req ScanRequest) (*ScanResult, error)
-	ScanCode(ctx context.Context, req ScanCodeRequest) (*ScanResult, error)
-	ScanFile(ctx context.Context, req ScanCodeRequest) (*ScanResult, error)
-	GetAnalysisPlan(ctx context.Context, req ScanRequest) (*planning.AnalysisPlan, error)
-}
-
-// Orchestrator coordinates the end-to-end static analysis and classification pipeline.
-type Orchestrator struct {
-	cfg        *config.Config
-	analyzers  []analyzer.Analyzer
-	rulesReg   *rules.Registry
-	cls        classifier.Classifier
-	planner    planning.AnalysisPlanner
-	normalizer *findings.Normalizer
-}
 
 // NewOrchestrator creates a fully configured scan Orchestrator.
 func NewOrchestrator(cfg *config.Config) *Orchestrator {
@@ -121,13 +61,6 @@ func NewOrchestrator(cfg *config.Config) *Orchestrator {
 		planner:    planner,
 		normalizer: findings.NewNormalizer(cls, normalizerOpts),
 	}
-}
-
-// ScannerService adapts Orchestrator to the Scanner interface.
-type ScannerService struct {
-	orch             *Orchestrator
-	cache            cache.Cache
-	cacheUnavailable bool
 }
 
 // NewScanner creates a new Scanner instance conforming to the Scanner interface.
@@ -240,28 +173,9 @@ func (o *Orchestrator) GetAnalysisPlan(ctx context.Context, req ScanRequest) (*p
 
 	cands := candidates.DiscoverCandidates(indexer.Index())
 
-	budget := planning.AnalysisBudget{
-		MaxDepth:                o.cfg.MaxDepth,
-		MaxInterproceduralDepth: o.cfg.MaxInterproceduralDepth,
-		MaxCandidates:           o.cfg.MaxCandidates,
-		MaxDeepCandidates:       o.cfg.MaxDeepCandidates,
-		MaxPathsPerCandidate:    o.cfg.MaxPathsPerCandidate,
-		Timeout:                 o.cfg.ClassifierTimeout,
-	}
+	planner := o.plannerFor(req.AIPlanner)
 
-	planner := o.planner
-	if req.AIPlanner && !o.cfg.AIPlannerEnabled {
-		planner = ai.NewSystemOnePlanner(ai.PlannerOptions{
-			DecisionsURL: o.cfg.ClassifierEndpoint,
-			APIKey:       o.cfg.ClassifierAPIKey,
-			Model:        o.cfg.SystemOneModel,
-			Timeout:      o.cfg.ClassifierTimeout,
-			Mode:         o.cfg.AIMode,
-			Fallback:     planning.NewDeterministicPlanner(),
-		})
-	}
-
-	plan, err := planner.Plan(ctx, cands, budget)
+	plan, err := planner.Plan(ctx, cands, o.analysisBudget())
 	if err != nil {
 		return nil, fmt.Errorf("planning error: %w", err)
 	}
@@ -359,124 +273,22 @@ func (o *Orchestrator) ScanRequest(ctx context.Context, req ScanRequest) (*ScanR
 		strategy = "adaptive"
 	}
 
-	budget := planning.AnalysisBudget{
-		MaxDepth:                o.cfg.MaxDepth,
-		MaxInterproceduralDepth: o.cfg.MaxInterproceduralDepth,
-		MaxCandidates:           o.cfg.MaxCandidates,
-		MaxDeepCandidates:       o.cfg.MaxDeepCandidates,
-		MaxPathsPerCandidate:    o.cfg.MaxPathsPerCandidate,
-		Timeout:                 o.cfg.ClassifierTimeout,
-	}
-
-	planner := o.planner
-	if req.AIPlanner && !o.cfg.AIPlannerEnabled {
-		planner = ai.NewSystemOnePlanner(ai.PlannerOptions{
-			DecisionsURL: o.cfg.ClassifierEndpoint,
-			APIKey:       o.cfg.ClassifierAPIKey,
-			Model:        o.cfg.SystemOneModel,
-			Timeout:      o.cfg.ClassifierTimeout,
-			Mode:         o.cfg.AIMode,
-			Fallback:     planning.NewDeterministicPlanner(),
-		})
-	}
-
 	var analysisPlan planning.AnalysisPlan
-	if strategy == "full" {
-		fullPlans := make([]planning.CandidatePlan, 0, len(discoveredCandidates))
-		for _, c := range discoveredCandidates {
-			fullPlans = append(fullPlans, planning.CandidatePlan{
-				CandidateID:          c.ID,
-				Priority:             100,
-				Analyze:              true,
-				Mode:                 planning.AnalysisDeep,
-				Depth:                budget.MaxDepth,
-				Interprocedural:      true,
-				VulnerabilityClasses: c.VulnerabilityClasses,
-				Reason:               "Full scan strategy requested",
-				PlannerProvider:      "deterministic",
-				PlannerModel:         "full",
-			})
+	analysisPlan, planner, err := o.planCandidates(ctx, discoveredCandidates, strategy, req.AIPlanner)
+	if err != nil {
+		if o.cfg.AIMode == "required" {
+			return nil, fmt.Errorf("planning error: %w", err)
 		}
-		analysisPlan = planning.AnalysisPlan{
-			Strategy:   "full",
-			Candidates: fullPlans,
-		}
-	} else {
-		p, err := planner.Plan(ctx, discoveredCandidates, budget)
-		if err != nil {
-			if o.cfg.AIMode == "required" {
-				return nil, fmt.Errorf("planning error: %w", err)
-			}
-			// In optional mode fallback to deterministic
-			fallbackPlan, fbErr := planning.NewDeterministicPlanner().Plan(ctx, discoveredCandidates, budget)
-			if fbErr != nil {
-				return nil, fmt.Errorf("deterministic fallback planner failed: %w", fbErr)
-			}
-			analysisPlan = fallbackPlan
-		} else {
-			analysisPlan = p
-		}
+		return nil, fmt.Errorf("deterministic fallback planner failed: %w", err)
 	}
 
 	// 6. Directives and Metadata maps
-	directives := make(map[string]analyzer.AnalysisDirectives)
-	metaMap := make(map[string]*findings.AnalysisMetadata)
-
-	var analyzedCount, skippedCount, shallowCount, mediumCount, deepCount int
-	for _, p := range analysisPlan.Candidates {
-		directives[p.CandidateID] = analyzer.AnalysisDirectives{
-			Analyze:                 p.Analyze,
-			Mode:                    string(p.Mode),
-			MaxDepth:                p.Depth,
-			MaxInterproceduralDepth: o.cfg.MaxInterproceduralDepth,
-			CandidateID:             p.CandidateID,
-		}
-
-		metaMap[p.CandidateID] = &findings.AnalysisMetadata{
-			Strategy:        strategy,
-			Priority:        p.Priority,
-			Depth:           p.Depth,
-			Interprocedural: p.Interprocedural,
-			PlannerProvider: p.PlannerProvider,
-			PlannerModel:    p.PlannerModel,
-		}
-
-		if p.Analyze {
-			analyzedCount++
-			switch p.Mode {
-			case planning.AnalysisDeep:
-				deepCount++
-			case planning.AnalysisMedium:
-				mediumCount++
-			case planning.AnalysisShallow:
-				shallowCount++
-			}
-		} else {
-			skippedCount++
-		}
-	}
+	directives, metaMap, counts := o.directivesFor(analysisPlan, strategy)
 
 	// 7. Execute Adaptive Static Analysis
-	for _, an := range o.analyzers {
-		if aa, ok := an.(analyzer.AdaptiveAnalyzer); ok {
-			aa.SetDirectives(directives)
-		}
-	}
-
-	var allEvidences []analyzer.Evidence
-
-	for _, file := range files {
-		content := fileContents[file.Path]
-
-		for _, an := range o.analyzers {
-			if an.Supports(file.Path) {
-				evidences, err := an.Analyze(ctx, content, file.RelPath)
-				if err != nil {
-					return nil, fmt.Errorf("parser error in %s: %w", file.RelPath, err)
-				}
-				allEvidences = append(allEvidences, evidences...)
-			}
-		}
+	allEvidences, err := o.analyzeFiles(ctx, files, fileContents, directives)
+	if err != nil {
+		return nil, err
 	}
 
 	// 8. Rule Evaluation
@@ -523,13 +335,13 @@ func (o *Orchestrator) ScanRequest(ctx context.Context, req ScanRequest) (*ScanR
 		FilesDiscovered:          len(files),
 		FilesParsed:              len(files),
 		CandidatesDiscovered:     len(discoveredCandidates),
-		CandidatesAnalyzed:       analyzedCount,
-		CandidatesSkipped:        skippedCount,
-		ShallowAnalyses:          shallowCount,
-		MediumAnalyses:           mediumCount,
-		DeepAnalyses:             deepCount,
-		PathsConsidered:          analyzedCount * 3,
-		PathsAnalyzed:            analyzedCount * 2,
+		CandidatesAnalyzed:       counts.analyzed,
+		CandidatesSkipped:        counts.skipped,
+		ShallowAnalyses:          counts.shallow,
+		MediumAnalyses:           counts.medium,
+		DeepAnalyses:             counts.deep,
+		PathsConsidered:          counts.analyzed * 3,
+		PathsAnalyzed:            counts.analyzed * 2,
 		AIPlanningRequests:       aiReqs,
 		AIPlanningLatency:        aiLat,
 		AIClassificationRequests: 0,
