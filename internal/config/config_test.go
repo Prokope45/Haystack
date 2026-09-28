@@ -161,7 +161,7 @@ func TestParseFlagsClassifierOptions(t *testing.T) {
 	buf := new(bytes.Buffer)
 	args := []string{
 		"--classifier-endpoint", "https://rlcd.example.com/classify",
-		"--classifier-model", "jev",
+		"--classifier-model", "system-one",
 		"--classifier-api-key", "my-key",
 		"--classifier-timeout", "10",
 		tmpDir,
@@ -175,13 +175,22 @@ func TestParseFlagsClassifierOptions(t *testing.T) {
 	if cfg.ClassifierEndpoint != "https://rlcd.example.com/classify" {
 		t.Errorf("expected endpoint, got %s", cfg.ClassifierEndpoint)
 	}
-	if cfg.ClassifierModel != "jev" {
-		t.Errorf("expected model jev, got %s", cfg.ClassifierModel)
+	if cfg.ClassifierModel != "system-one" {
+		t.Errorf("expected model system-one, got %s", cfg.ClassifierModel)
 	}
 	if cfg.ClassifierAPIKey != "my-key" {
 		t.Errorf("expected api key my-key, got %s", cfg.ClassifierAPIKey)
 	}
 	if cfg.ClassifierTimeout.Seconds() != 10 {
 		t.Errorf("expected timeout 10s, got %v", cfg.ClassifierTimeout)
+	}
+}
+
+func TestNormalizeClassifierProvider(t *testing.T) {
+	if got := NormalizeClassifierProvider("jev"); got != "system-one" {
+		t.Fatalf("expected deprecated jev alias to normalize to system-one, got %q", got)
+	}
+	if got := NormalizeClassifierProvider(" SYSTEM-ONE "); got != "system-one" {
+		t.Fatalf("expected system-one provider to normalize, got %q", got)
 	}
 }

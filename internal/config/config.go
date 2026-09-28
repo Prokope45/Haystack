@@ -33,15 +33,15 @@ type Config struct {
 	ShowVersion             bool
 	DiffRange               string        // Git diff range (e.g. HEAD~1, main...HEAD)
 	ClassifierEnabled       bool          // Whether classifier is explicitly enabled
-	ClassifierProvider      string        // kev, jev, heuristic, rlcd
-	ClassifierEndpoint      string        // Optional remote RLCD/Kev/Jev classifier URL
-	ClassifierModel         string        // heuristic, kev, jev, rlcd, or custom model identifier
+	ClassifierProvider      string        // system-one, kev, heuristic, rlcd, or custom provider
+	ClassifierEndpoint      string        // Optional remote classifier URL
+	ClassifierModel         string        // heuristic, system-one, rlcd, or custom model identifier
 	ClassifierAPIKey        string        // Optional auth token for remote model API
 	ClassifierTimeout       time.Duration // Timeout for classifier requests
-	OpenRouterAPIKey        string        // OpenRouter API key for Jev
+	OpenRouterAPIKey        string        // OpenRouter API key for System-One
 	OpenRouterModel         string        // OpenRouter model for explanation LLM (default: openrouter/free)
 	OpenRouterBaseURL       string        // OpenRouter API base URL
-	SystemOneModel          string        // Jev decision model (default: ~typesafe/jev-latest)
+	SystemOneModel          string        // System-One decision model (default: ~typesafe/jev-latest)
 	KevEndpoint             string        // Local Kev endpoint (default: http://localhost:8080/classify)
 	AnalysisStrategy        string        // Analysis strategy: adaptive, full (default: adaptive)
 	AIPlannerEnabled        bool          // Enable external AI candidate planner
@@ -54,6 +54,16 @@ type Config struct {
 	MaxPathsPerCandidate    int           // Maximum exploration paths per candidate (default: 500)
 	VerboseAnalysis         bool          // Display detailed candidate planning telemetry
 	NoCache                 bool          // Bypass scanner cache for this invocation
+}
+
+// NormalizeClassifierProvider returns the canonical provider identity.
+// "jev" remains accepted as a deprecated alias for "system-one".
+func NormalizeClassifierProvider(provider string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "jev" {
+		return "system-one"
+	}
+	return provider
 }
 
 // DefaultConfig returns default configuration settings.
@@ -188,17 +198,17 @@ func ParseFlags(args []string, stderr io.Writer) (*Config, error) {
 
 	// Classifier configuration
 	fs.BoolVar(&cfg.ClassifierEnabled, "classifier", false, "Enable external classifier service")
-	fs.StringVar(&cfg.ClassifierProvider, "classifier-provider", "heuristic", "Classifier provider: kev, jev, heuristic, rlcd")
-	fs.StringVar(&cfg.ClassifierEndpoint, "classifier-endpoint", cfg.ClassifierEndpoint, "External RLCD / Kev / Jev classifier endpoint URL")
+	fs.StringVar(&cfg.ClassifierProvider, "classifier-provider", "heuristic", "Classifier provider: system-one, heuristic, rlcd, or custom")
+	fs.StringVar(&cfg.ClassifierEndpoint, "classifier-endpoint", cfg.ClassifierEndpoint, "External classifier endpoint URL")
 	fs.StringVar(&cfg.ClassifierEndpoint, "classifier-url", cfg.ClassifierEndpoint, "Alias for --classifier-endpoint")
-	fs.StringVar(&cfg.ClassifierModel, "classifier-model", cfg.ClassifierModel, "Decision model to use: heuristic, kev, jev, rlcd, or custom")
+	fs.StringVar(&cfg.ClassifierModel, "classifier-model", cfg.ClassifierModel, "Decision model to use: heuristic, system-one, rlcd, or custom")
 	fs.StringVar(&cfg.ClassifierModel, "model", cfg.ClassifierModel, "Alias for --classifier-model")
 	fs.StringVar(&cfg.ClassifierAPIKey, "classifier-api-key", cfg.ClassifierAPIKey, "API key / token for external classifier service")
 	fs.IntVar(&timeoutSec, "classifier-timeout", 5, "Classifier HTTP timeout in seconds")
 
-	// OpenRouter and Kev specific options
-	fs.StringVar(&cfg.OpenRouterAPIKey, "openrouter-api-key", cfg.OpenRouterAPIKey, "OpenRouter API Key for Jev classifier")
-	fs.StringVar(&cfg.SystemOneModel, "system-one-model", cfg.SystemOneModel, "Jev decision model identifier (default: ~typesafe/jev-latest)")
+	// OpenRouter and Kev-specific options
+	fs.StringVar(&cfg.OpenRouterAPIKey, "openrouter-api-key", cfg.OpenRouterAPIKey, "OpenRouter API key for System-One classifier")
+	fs.StringVar(&cfg.SystemOneModel, "system-one-model", cfg.SystemOneModel, "System-One decision model identifier (default: ~typesafe/jev-latest)")
 	fs.StringVar(&cfg.OpenRouterModel, "openrouter-model", cfg.OpenRouterModel, "OpenRouter model identifier for vulnerability explanation LLM (default: openrouter/free)")
 	fs.StringVar(&cfg.KevEndpoint, "kev-url", cfg.KevEndpoint, "Local Kev service endpoint URL (default: http://localhost:8080/classify)")
 

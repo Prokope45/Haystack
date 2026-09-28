@@ -1,8 +1,6 @@
 package factory
 
 import (
-	"strings"
-
 	"haystack/internal/classifier"
 	"haystack/internal/classifier/heuristic"
 	"haystack/internal/classifier/kev"
@@ -19,11 +17,11 @@ func NewClassifier(cfg *config.Config) classifier.Classifier {
 
 	fallback := heuristic.NewHeuristicClassifier()
 
-	provider := strings.ToLower(strings.TrimSpace(cfg.ClassifierProvider))
+	provider := config.NormalizeClassifierProvider(cfg.ClassifierProvider)
 
 	switch provider {
-	case "jev", "openrouter":
-		return jevClient(cfg, fallback)
+	case "system-one", "openrouter":
+		return systemOneClient(cfg, fallback)
 	case "kev":
 		return kevClient(cfg, fallback)
 	case "rlcd":
@@ -35,7 +33,7 @@ func NewClassifier(cfg *config.Config) classifier.Classifier {
 	}
 }
 
-func jevClient(cfg *config.Config, fallback classifier.Classifier) classifier.Classifier {
+func systemOneClient(cfg *config.Config, fallback classifier.Classifier) classifier.Classifier {
 	endpoint := cfg.ClassifierEndpoint
 	if endpoint == "" {
 		endpoint = cfg.OpenRouterBaseURL
@@ -44,7 +42,7 @@ func jevClient(cfg *config.Config, fallback classifier.Classifier) classifier.Cl
 	if explainerModel == "" {
 		explainerModel = "openrouter/free"
 	}
-	if cfg.ClassifierModel != "" && cfg.ClassifierModel != "heuristic" && cfg.ClassifierModel != "jev" {
+	if cfg.ClassifierModel != "" && cfg.ClassifierModel != "heuristic" && cfg.ClassifierModel != "system-one" && cfg.ClassifierModel != "jev" {
 		explainerModel = cfg.ClassifierModel
 	}
 	systemOneModel := cfg.SystemOneModel
@@ -103,7 +101,7 @@ func defaultClient(cfg *config.Config, fallback classifier.Classifier) classifie
 		if explainerModel == "" {
 			explainerModel = "openrouter/free"
 		}
-		if cfg.ClassifierModel != "" && cfg.ClassifierModel != "heuristic" && cfg.ClassifierModel != "jev" {
+		if cfg.ClassifierModel != "" && cfg.ClassifierModel != "heuristic" && cfg.ClassifierModel != "system-one" && cfg.ClassifierModel != "jev" {
 			explainerModel = cfg.ClassifierModel
 		}
 		systemOneModel := cfg.SystemOneModel

@@ -32,12 +32,12 @@ func RunCLI(cmdName string, args []string) error {
 	fs.StringVar(&githubRepo, "github-repo", os.Getenv("GITHUB_REPOSITORY"), "Target GitHub repository in 'owner/repo' format")
 
 	// Classifier configuration
-	fs.StringVar(&cfg.ClassifierProvider, "classifier-provider", cfg.ClassifierProvider, "Classifier provider: kev, jev, openrouter, heuristic")
+	fs.StringVar(&cfg.ClassifierProvider, "classifier-provider", cfg.ClassifierProvider, "Classifier provider: system-one, heuristic, rlcd, or custom")
 	fs.StringVar(&cfg.ClassifierEndpoint, "classifier-endpoint", cfg.ClassifierEndpoint, "External classifier endpoint URL")
-	fs.StringVar(&cfg.ClassifierModel, "classifier-model", cfg.ClassifierModel, "Classifier model: heuristic, kev, jev, openrouter/free")
+	fs.StringVar(&cfg.ClassifierModel, "classifier-model", cfg.ClassifierModel, "Classifier model: heuristic, system-one, openrouter/free, or custom")
 	fs.StringVar(&cfg.ClassifierAPIKey, "classifier-api-key", cfg.ClassifierAPIKey, "API key for external classifier")
 	fs.StringVar(&cfg.OpenRouterAPIKey, "openrouter-api-key", cfg.OpenRouterAPIKey, "OpenRouter API Key")
-	fs.StringVar(&cfg.SystemOneModel, "system-one-model", cfg.SystemOneModel, "Jev decision model identifier (default: ~typesafe/jev-latest)")
+	fs.StringVar(&cfg.SystemOneModel, "system-one-model", cfg.SystemOneModel, "System-One decision model identifier (default: ~typesafe/jev-latest)")
 	fs.StringVar(&cfg.OpenRouterModel, "openrouter-model", cfg.OpenRouterModel, "OpenRouter model identifier for vulnerability explanation LLM (default: openrouter/free)")
 	fs.StringVar(&cfg.KevEndpoint, "kev-url", cfg.KevEndpoint, "Local Kev service endpoint URL (default: http://localhost:8080/classify)")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Logging verbosity: debug, info, warn, or error")

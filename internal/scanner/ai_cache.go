@@ -147,7 +147,7 @@ func validAnalysisPlan(plan planning.AnalysisPlan) bool {
 
 func aiPlannerSucceeded(plan planning.AnalysisPlan) bool {
 	for _, candidate := range plan.Candidates {
-		if candidate.PlannerProvider != "jev" {
+		if candidate.PlannerProvider != "system-one" {
 			return false
 		}
 	}
@@ -187,10 +187,11 @@ func classifierModelIdentity(cfg *config.Config) string {
 	if cfg.ClassifierModel != "" && cfg.ClassifierModel != "heuristic" {
 		return cfg.ClassifierModel
 	}
-	if cfg.ClassifierProvider == "jev" || cfg.ClassifierProvider == "openrouter" {
+	provider := config.NormalizeClassifierProvider(cfg.ClassifierProvider)
+	if provider == "system-one" || provider == "openrouter" {
 		return cfg.SystemOneModel + ":" + cfg.OpenRouterModel
 	}
-	return cfg.ClassifierProvider + ":" + cfg.ClassifierModel
+	return config.NormalizeClassifierProvider(cfg.ClassifierProvider) + ":" + cfg.ClassifierModel
 }
 
 func classifierConfigIdentity(cfg *config.Config) map[string]any {
@@ -210,10 +211,10 @@ func classifierEndpointIdentity(cfg *config.Config) string {
 	if cfg.ClassifierEndpoint != "" {
 		return cfg.ClassifierEndpoint
 	}
-	switch cfg.ClassifierProvider {
+	switch config.NormalizeClassifierProvider(cfg.ClassifierProvider) {
 	case "kev":
 		return cfg.KevEndpoint
-	case "jev", "openrouter":
+	case "system-one", "openrouter":
 		return cfg.OpenRouterBaseURL
 	default:
 		if cfg.OpenRouterAPIKey != "" {

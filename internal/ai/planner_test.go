@@ -14,13 +14,13 @@ import (
 	"haystack/internal/planning"
 )
 
-func TestJevPlannerSuccess(t *testing.T) {
+func TestSystemOnePlannerSuccess(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Errorf("expected Bearer test-key, got %s", r.Header.Get("Authorization"))
 		}
 
-		var req jevDecisionRequest
+		var req systemOneDecisionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode error: %v", err)
 		}
@@ -30,10 +30,10 @@ func TestJevPlannerSuccess(t *testing.T) {
 		}
 
 		noulVal := 0.95
-		resp := jevDecisionResponse{
+		resp := systemOneDecisionResponse{
 			ID:    "dec-123",
 			Model: DefaultSystemOne,
-			Answers: map[string]jevAnswer{
+			Answers: map[string]systemOneAnswer{
 				"should_analyze": {
 					Type: "noul",
 					Noul: &noulVal,
@@ -50,7 +50,7 @@ func TestJevPlannerSuccess(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	planner := NewJevPlanner(PlannerOptions{
+	planner := NewSystemOnePlanner(PlannerOptions{
 		DecisionsURL: ts.URL,
 		APIKey:       "test-key",
 		Model:        DefaultSystemOne,
@@ -94,8 +94,8 @@ func TestJevPlannerSuccess(t *testing.T) {
 	if p.Priority != 95 {
 		t.Errorf("expected priority 95, got %d", p.Priority)
 	}
-	if p.PlannerProvider != "jev" {
-		t.Errorf("expected planner provider jev, got %s", p.PlannerProvider)
+	if p.PlannerProvider != "system-one" {
+		t.Errorf("expected planner provider system-one, got %s", p.PlannerProvider)
 	}
 
 	reqs, lat := planner.Telemetry()
@@ -104,13 +104,13 @@ func TestJevPlannerSuccess(t *testing.T) {
 	}
 }
 
-func TestJevPlannerFallbackInOptionalMode(t *testing.T) {
+func TestSystemOnePlannerFallbackInOptionalMode(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server error", http.StatusInternalServerError)
 	}))
 	defer ts.Close()
 
-	planner := NewJevPlanner(PlannerOptions{
+	planner := NewSystemOnePlanner(PlannerOptions{
 		DecisionsURL: ts.URL,
 		APIKey:       "test-key",
 		Mode:         "optional",
@@ -148,13 +148,13 @@ func TestJevPlannerFallbackInOptionalMode(t *testing.T) {
 	}
 }
 
-func TestJevPlannerFailureInRequiredMode(t *testing.T) {
+func TestSystemOnePlannerFailureInRequiredMode(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server error", http.StatusInternalServerError)
 	}))
 	defer ts.Close()
 
-	planner := NewJevPlanner(PlannerOptions{
+	planner := NewSystemOnePlanner(PlannerOptions{
 		DecisionsURL: ts.URL,
 		APIKey:       "test-key",
 		Mode:         "required",

@@ -6,7 +6,7 @@ package buildinfo
 const ScannerVersion = "0.1.1-poc"
 
 // PlannerPromptVersion identifies the AI planner prompt and request contract.
-const PlannerPromptVersion = "jev-planner-v1"
+const PlannerPromptVersion = "system-one-planner-v1"
 
 // PlannerSchemaVersion identifies the AI planner request and response schemas.
 const PlannerSchemaVersion = "1"

@@ -340,7 +340,7 @@ func (s *ScannerService) scanRequestKey(ctx context.Context, cfg *config.Config,
 		MaxDepth:                       cfg.MaxDepth,
 		MaxInterproceduralDepth:        cfg.MaxInterproceduralDepth, MaxCandidates: cfg.MaxCandidates,
 		MaxDeepCandidates: cfg.MaxDeepCandidates, MaxPathsPerCandidate: cfg.MaxPathsPerCandidate,
-		ClassifierProvider: cfg.ClassifierProvider, ClassifierModel: cfg.ClassifierModel,
+		ClassifierProvider: config.NormalizeClassifierProvider(cfg.ClassifierProvider), ClassifierModel: cfg.ClassifierModel,
 		ClassifierEndpoint: classifierEndpointIdentity(cfg), PlannerEndpoint: plannerEndpointIdentity(cfg), SystemOneModel: cfg.SystemOneModel,
 		OpenRouterModel: cfg.OpenRouterModel, ClassifierTimeout: int64(cfg.ClassifierTimeout),
 		ExcludeDirs:             sortedCopy(cfg.ExcludeDirs),
@@ -410,7 +410,7 @@ func (s *ScannerService) codeScanKey(ctx context.Context, cfg *config.Config, re
 		MaxDepth:                       cfg.MaxDepth,
 		MaxInterproceduralDepth:        cfg.MaxInterproceduralDepth, MaxCandidates: cfg.MaxCandidates,
 		MaxDeepCandidates: cfg.MaxDeepCandidates, MaxPathsPerCandidate: cfg.MaxPathsPerCandidate,
-		ClassifierProvider: cfg.ClassifierProvider, ClassifierModel: cfg.ClassifierModel,
+		ClassifierProvider: config.NormalizeClassifierProvider(cfg.ClassifierProvider), ClassifierModel: cfg.ClassifierModel,
 		ClassifierEndpoint: classifierEndpointIdentity(cfg), PlannerEndpoint: plannerEndpointIdentity(cfg), SystemOneModel: cfg.SystemOneModel,
 		OpenRouterModel: cfg.OpenRouterModel, ClassifierTimeout: int64(cfg.ClassifierTimeout),
 		PlannerPromptVersion:    buildinfo.PlannerPromptVersion,
@@ -523,7 +523,7 @@ func (s *ScannerService) configureIndependentCaches(orch *Orchestrator) {
 	if s.cache == nil {
 		return
 	}
-	if planner, ok := orch.planner.(*ai.JevPlanner); ok {
+	if planner, ok := orch.planner.(*ai.SystemOnePlanner); ok {
 		provider, model, endpoint := planner.CacheIdentity()
 		orch.planner = &cachedPlanner{
 			next: planner, store: s.cache,
@@ -544,7 +544,7 @@ func (s *ScannerService) configureIndependentCaches(orch *Orchestrator) {
 		orch.cls = &cachedClassifier{
 			next: orch.cls, store: s.cache,
 			identity: aiCacheIdentity{
-				Provider:              orch.cfg.ClassifierProvider,
+				Provider:              config.NormalizeClassifierProvider(orch.cfg.ClassifierProvider),
 				Model:                 classifierModelIdentity(orch.cfg),
 				ModelVersion:          classifierModelIdentity(orch.cfg),
 				Endpoint:              classifierEndpointIdentity(orch.cfg),

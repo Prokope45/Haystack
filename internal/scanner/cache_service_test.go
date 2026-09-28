@@ -236,7 +236,7 @@ type countingPlanner struct {
 	err   error
 }
 
-func (p *countingPlanner) Name() string { return "jev" }
+func (p *countingPlanner) Name() string { return "system-one" }
 func (p *countingPlanner) Plan(_ context.Context, cands []candidates.AnalysisCandidate, _ planning.AnalysisBudget) (planning.AnalysisPlan, error) {
 	p.calls++
 	if p.err != nil {
@@ -244,7 +244,7 @@ func (p *countingPlanner) Plan(_ context.Context, cands []candidates.AnalysisCan
 	}
 	plans := make([]planning.CandidatePlan, 0, len(cands))
 	for _, candidate := range cands {
-		plans = append(plans, planning.CandidatePlan{CandidateID: candidate.ID, Priority: 80, Analyze: true, Mode: planning.AnalysisDeep, PlannerProvider: "jev", PlannerModel: "model-v1"})
+		plans = append(plans, planning.CandidatePlan{CandidateID: candidate.ID, Priority: 80, Analyze: true, Mode: planning.AnalysisDeep, PlannerProvider: "system-one", PlannerModel: "model-v1"})
 	}
 	return planning.AnalysisPlan{Strategy: "adaptive", Candidates: plans}, nil
 }
@@ -273,7 +273,7 @@ func TestIndependentPlannerAndClassifierCaches(t *testing.T) {
 	planner := &countingPlanner{}
 	wrappedPlanner := &cachedPlanner{
 		next: planner, store: store,
-		identity: aiCacheIdentity{Provider: "jev", Model: "model-v1", ModelVersion: "model-v1", PromptVersion: "prompt-v1", RequestSchemaVersion: "1", ResponseSchemaVersion: "1"},
+		identity: aiCacheIdentity{Provider: "system-one", Model: "model-v1", ModelVersion: "model-v1", PromptVersion: "prompt-v1", RequestSchemaVersion: "1", ResponseSchemaVersion: "1"},
 	}
 	ctx1 := context.WithValue(context.Background(), invocationStateKey{}, &invocationCacheState{})
 	firstPlan, err := wrappedPlanner.Plan(ctx1, []candidates.AnalysisCandidate{candidate}, budget)
@@ -290,7 +290,7 @@ func TestIndependentPlannerAndClassifierCaches(t *testing.T) {
 	}
 	newPlannerModel := &cachedPlanner{
 		next: planner, store: store,
-		identity: aiCacheIdentity{Provider: "jev", Model: "model-v2", ModelVersion: "model-v2", PromptVersion: "prompt-v1", RequestSchemaVersion: "1", ResponseSchemaVersion: "1"},
+		identity: aiCacheIdentity{Provider: "system-one", Model: "model-v2", ModelVersion: "model-v2", PromptVersion: "prompt-v1", RequestSchemaVersion: "1", ResponseSchemaVersion: "1"},
 	}
 	if _, err := newPlannerModel.Plan(context.Background(), []candidates.AnalysisCandidate{candidate}, budget); err != nil {
 		t.Fatal(err)
@@ -374,7 +374,7 @@ func TestAIFailuresAreNotCached(t *testing.T) {
 	plannerFailure := &countingPlanner{err: errors.New("planner unavailable")}
 	wrappedPlanner := &cachedPlanner{
 		next: plannerFailure, store: store,
-		identity: aiCacheIdentity{Provider: "jev", Model: "remote", PromptVersion: "prompt", RequestSchemaVersion: "1", ResponseSchemaVersion: "1"},
+		identity: aiCacheIdentity{Provider: "system-one", Model: "remote", PromptVersion: "prompt", RequestSchemaVersion: "1", ResponseSchemaVersion: "1"},
 	}
 	for range 2 {
 		if _, err := wrappedPlanner.Plan(context.Background(), nil, planning.AnalysisBudget{}); err == nil {

@@ -13,14 +13,14 @@ import (
 	"haystack/internal/config"
 )
 
-// TestSASTWithMockJevEndpoint verifies that the SAST scan pipeline correctly parses
-// code, detects vulnerability candidates, and calls the Jev endpoint to classify findings.
-func TestSASTWithMockJevEndpoint(t *testing.T) {
-	var jevCalled bool
+// TestSASTWithMockSystemOneEndpoint verifies that the SAST scan pipeline correctly parses
+// code, detects vulnerability candidates, and calls the System-One endpoint to classify findings.
+func TestSASTWithMockSystemOneEndpoint(t *testing.T) {
+	var systemOneCalled bool
 	var explainerCalled bool
 	var receivedPrompt string
 
-	// Mock Jev decisions and LLM explanation HTTP endpoints
+	// Mock System-One decisions and LLM explanation HTTP endpoints
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-api-key" {
 			t.Errorf("expected Bearer test-api-key, got %s", r.Header.Get("Authorization"))
@@ -28,9 +28,9 @@ func TestSASTWithMockJevEndpoint(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 
-		// Route 1: Jev Decisions endpoint
+		// Route 1: System-One decisions endpoint
 		if strings.Contains(r.URL.Path, "decisions") {
-			jevCalled = true
+			systemOneCalled = true
 
 			var decReq struct {
 				Model     string                 `json:"model"`
@@ -45,7 +45,7 @@ func TestSASTWithMockJevEndpoint(t *testing.T) {
 				t.Errorf("expected state to contain exec.Command, got %s", decReq.State)
 			}
 
-			jevResponse := map[string]interface{}{
+			systemOneResponse := map[string]interface{}{
 				"id":    "gen-mock-jev-123",
 				"model": "~typesafe/jev-latest",
 				"answers": map[string]interface{}{
@@ -64,7 +64,7 @@ func TestSASTWithMockJevEndpoint(t *testing.T) {
 					},
 				},
 			}
-			_ = json.NewEncoder(w).Encode(jevResponse)
+			_ = json.NewEncoder(w).Encode(systemOneResponse)
 			return
 		}
 
@@ -109,7 +109,7 @@ func TestSASTWithMockJevEndpoint(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// Configure SAST tool to use the mocked Jev endpoint
+	// Configure SAST tool to use the mocked System-One endpoint through the deprecated alias.
 	cfg := config.DefaultConfig()
 	cfg.ClassifierProvider = "jev"
 	cfg.ClassifierEndpoint = ts.URL
@@ -142,8 +142,8 @@ func vulnHandler(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("ScanCode failed: %v", err)
 	}
 
-	if !jevCalled {
-		t.Fatal("expected Jev decisions endpoint to be called during scan, but it was not")
+	if !systemOneCalled {
+		t.Fatal("expected System-One decisions endpoint to be called during scan, but it was not")
 	}
 
 	if !explainerCalled {
@@ -162,14 +162,14 @@ func vulnHandler(w http.ResponseWriter, r *http.Request) {
 	if f.RuleID != "RULE-CMD-001" {
 		t.Errorf("expected RULE-CMD-001, got %s", f.RuleID)
 	}
-	if f.Model != "jev" {
-		t.Errorf("expected finding model 'jev', got %q", f.Model)
+	if f.Model != "system-one" {
+		t.Errorf("expected finding model 'system-one', got %q", f.Model)
 	}
 	if f.Classification == nil {
 		t.Fatal("expected finding Classification to be populated, got nil")
 	}
-	if f.Classification.Model != "jev" {
-		t.Errorf("expected classification model 'jev', got %q", f.Classification.Model)
+	if f.Classification.Model != "system-one" {
+		t.Errorf("expected classification model 'system-one', got %q", f.Classification.Model)
 	}
 	if f.Classification.Confidence != 0.98 {
 		t.Errorf("expected confidence 0.98, got %f", f.Classification.Confidence)
@@ -178,18 +178,18 @@ func vulnHandler(w http.ResponseWriter, r *http.Request) {
 		t.Error("expected non-empty explanation in classification")
 	}
 
-	t.Logf("Mock Jev test passed: finding classified by model %s with confidence %.2f: %s",
+	t.Logf("Mock System-One test passed: finding classified by model %s with confidence %.2f: %s",
 		f.Classification.Model, f.Classification.Confidence, f.Classification.Explanation)
 }
 
-// TestSASTWithLiveJevEndpoint runs the end-to-end scan pipeline against the live
-// OpenRouter Jev endpoint using the API key loaded from .env.
-// All code and environment inputs are mocked in-memory except for the Jev classification call.
-func TestSASTWithLiveJevEndpoint(t *testing.T) {
+// TestSASTWithLiveSystemOneEndpoint runs the end-to-end scan pipeline against the live
+// OpenRouter System-One endpoint using the API key loaded from .env.
+// All code and environment inputs are mocked in-memory except for the System-One classification call.
+func TestSASTWithLiveSystemOneEndpoint(t *testing.T) {
 	cfg := config.DefaultConfig()
 
 	if cfg.OpenRouterAPIKey == "" {
-		t.Skip("Skipping live Jev test: OPENROUTER_API_KEY is not set in .env or environment")
+		t.Skip("Skipping live System-One test: OPENROUTER_API_KEY is not set in .env or environment")
 	}
 
 	cfg.ClassifierProvider = "jev"
@@ -216,7 +216,7 @@ func runCommand(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	t.Log("Initiating SAST scan on mock code with live Jev classification...")
+	t.Log("Initiating SAST scan on mock code with live System-One classification...")
 	findings, summary, err := orch.ScanCode(ctx, []byte(mockVulnerableCode), "go", "diagnostics.go")
 	if err != nil {
 		t.Fatalf("SAST scan failed: %v", err)
@@ -233,12 +233,12 @@ func runCommand(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("expected classification to be present, got nil")
 	}
 
-	if f.Model != "jev" {
-		t.Fatalf("expected classification model 'jev', got %q (classification may have failed and fallen back to heuristic)", f.Model)
+	if f.Model != "system-one" {
+		t.Fatalf("expected classification model 'system-one', got %q (classification may have failed and fallen back to heuristic)", f.Model)
 	}
 
-	if f.Classification.Model != "jev" {
-		t.Fatalf("expected classification.Model to be 'jev', got %q", f.Classification.Model)
+	if f.Classification.Model != "system-one" {
+		t.Fatalf("expected classification.Model to be 'system-one', got %q", f.Classification.Model)
 	}
 
 	if f.Confidence <= 0 {
@@ -246,10 +246,10 @@ func runCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if f.Classification.Explanation == "" {
-		t.Errorf("expected non-empty explanation from Jev")
+		t.Errorf("expected non-empty explanation from System-One")
 	}
 
-	t.Logf("Successfully verified SAST + Jev classification:")
+	t.Logf("Successfully verified SAST + System-One classification:")
 	t.Logf("  Model:       %s", f.Classification.Model)
 	t.Logf("  Label:       %s", f.Classification.Label)
 	t.Logf("  Confidence:  %.2f", f.Classification.Confidence)

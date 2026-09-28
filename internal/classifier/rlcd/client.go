@@ -14,8 +14,6 @@ import (
 // Supported canonical model names
 const (
 	ModelHeuristic = "heuristic"
-	ModelKev       = "kev"
-	ModelJev       = "jev"
 	ModelRLCD      = "rlcd"
 )
 
@@ -29,7 +27,7 @@ type ClientOptions struct {
 }
 
 // Client connects to an RLCD (Reinforcement Learning from Canonical Decisions)
-// or calibrated decision model API (such as Jev, Kev, or custom RLCD models).
+// or a calibrated decision model API with a custom model identifier.
 type Client struct {
 	endpoint   string
 	model      string
@@ -61,7 +59,7 @@ func NewClient(opts ClientOptions) *Client {
 	}
 }
 
-// ModelName returns the configured decision model name (e.g. "jev", "kev", "rlcd").
+// ModelName returns the configured decision model name.
 func (c *Client) ModelName() string {
 	return c.model
 }

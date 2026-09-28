@@ -13,7 +13,7 @@ import (
 	"haystack/internal/classifier/heuristic"
 )
 
-func TestRLCDClientJevModel(t *testing.T) {
+func TestRLCDClientSystemOneModel(t *testing.T) {
 	var receivedModelHeader string
 	var receivedAuthHeader string
 	var receivedPayload map[string]interface{}
@@ -25,14 +25,14 @@ func TestRLCDClientJevModel(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&receivedPayload)
 
 		res := classifier.ClassificationResult{
-			Model:      "jev",
+			Model:      "system-one",
 			Label:      "command_injection",
 			Confidence: 0.97,
 			Probabilities: map[string]float64{
 				"command_injection": 0.97,
 				"safe_code":         0.02,
 			},
-			Explanation: "Jev RLCD decision model classified command injection pattern.",
+			Explanation: "System-One RLCD decision model classified command injection pattern.",
 		}
 		_ = json.NewEncoder(w).Encode(res)
 	}))
@@ -40,13 +40,13 @@ func TestRLCDClientJevModel(t *testing.T) {
 
 	client := NewClient(ClientOptions{
 		Endpoint: server.URL,
-		Model:    ModelJev,
+		Model:    "system-one",
 		APIKey:   "secret-token-123",
 		Timeout:  2 * time.Second,
 	})
 
-	if client.ModelName() != "jev" {
-		t.Fatalf("expected model jev, got %s", client.ModelName())
+	if client.ModelName() != "system-one" {
+		t.Fatalf("expected model system-one, got %s", client.ModelName())
 	}
 
 	ctx := context.Background()
@@ -63,17 +63,17 @@ func TestRLCDClientJevModel(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if receivedModelHeader != "jev" {
-		t.Errorf("expected X-Model-Name header 'jev', got %s", receivedModelHeader)
+	if receivedModelHeader != "system-one" {
+		t.Errorf("expected X-Model-Name header 'system-one', got %s", receivedModelHeader)
 	}
 	if receivedAuthHeader != "Bearer secret-token-123" {
 		t.Errorf("expected Authorization header 'Bearer secret-token-123', got %s", receivedAuthHeader)
 	}
-	if receivedPayload["model"] != "jev" {
-		t.Errorf("expected payload model 'jev', got %v", receivedPayload["model"])
+	if receivedPayload["model"] != "system-one" {
+		t.Errorf("expected payload model 'system-one', got %v", receivedPayload["model"])
 	}
-	if result.Model != "jev" {
-		t.Errorf("expected result model 'jev', got %s", result.Model)
+	if result.Model != "system-one" {
+		t.Errorf("expected result model 'system-one', got %s", result.Model)
 	}
 	if result.Confidence != 0.97 {
 		t.Errorf("expected confidence 0.97, got %f", result.Confidence)
@@ -89,7 +89,7 @@ func TestRLCDClientFallbackOnServerFailure(t *testing.T) {
 	fallback := heuristic.NewHeuristicClassifier()
 	client := NewClient(ClientOptions{
 		Endpoint: server.URL,
-		Model:    ModelKev,
+		Model:    "custom-model",
 		Fallback: fallback,
 	})
 

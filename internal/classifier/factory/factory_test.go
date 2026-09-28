@@ -6,7 +6,7 @@ import (
 	"haystack/internal/config"
 )
 
-func TestFactoryJevProvider(t *testing.T) {
+func TestFactoryDeprecatedJevProviderAlias(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ClassifierProvider = "jev"
 	cfg.OpenRouterAPIKey = "test-sk"
@@ -16,8 +16,8 @@ func TestFactoryJevProvider(t *testing.T) {
 	if cls == nil {
 		t.Fatal("expected non-nil classifier")
 	}
-	if cls.ModelName() != "jev" {
-		t.Errorf("expected model jev, got %s", cls.ModelName())
+	if cls.ModelName() != "system-one" {
+		t.Errorf("expected model system-one, got %s", cls.ModelName())
 	}
 }
 

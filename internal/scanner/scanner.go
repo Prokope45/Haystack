@@ -92,8 +92,8 @@ func NewOrchestrator(cfg *config.Config) *Orchestrator {
 	cls := factory.NewClassifier(cfg)
 
 	var planner planning.AnalysisPlanner
-	if cfg.AIPlannerEnabled || (cfg.ClassifierProvider == "jev" && cfg.AIPlannerEnabled) {
-		planner = ai.NewJevPlanner(ai.PlannerOptions{
+	if cfg.AIPlannerEnabled {
+		planner = ai.NewSystemOnePlanner(ai.PlannerOptions{
 			DecisionsURL: cfg.ClassifierEndpoint,
 			APIKey:       cfg.ClassifierAPIKey,
 			Model:        cfg.SystemOneModel,
@@ -251,7 +251,7 @@ func (o *Orchestrator) GetAnalysisPlan(ctx context.Context, req ScanRequest) (*p
 
 	planner := o.planner
 	if req.AIPlanner && !o.cfg.AIPlannerEnabled {
-		planner = ai.NewJevPlanner(ai.PlannerOptions{
+		planner = ai.NewSystemOnePlanner(ai.PlannerOptions{
 			DecisionsURL: o.cfg.ClassifierEndpoint,
 			APIKey:       o.cfg.ClassifierAPIKey,
 			Model:        o.cfg.SystemOneModel,
@@ -370,7 +370,7 @@ func (o *Orchestrator) ScanRequest(ctx context.Context, req ScanRequest) (*ScanR
 
 	planner := o.planner
 	if req.AIPlanner && !o.cfg.AIPlannerEnabled {
-		planner = ai.NewJevPlanner(ai.PlannerOptions{
+		planner = ai.NewSystemOnePlanner(ai.PlannerOptions{
 			DecisionsURL: o.cfg.ClassifierEndpoint,
 			APIKey:       o.cfg.ClassifierAPIKey,
 			Model:        o.cfg.SystemOneModel,

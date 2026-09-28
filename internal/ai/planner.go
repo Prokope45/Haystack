@@ -22,7 +22,7 @@ const (
 	DefaultSystemOne    = "~typesafe/jev-latest"
 )
 
-// PlannerOptions configures a Jev-based AnalysisPlanner.
+// PlannerOptions configures a System-One-based AnalysisPlanner.
 type PlannerOptions struct {
 	DecisionsURL string
 	APIKey       string
@@ -32,8 +32,8 @@ type PlannerOptions struct {
 	Fallback     planning.AnalysisPlanner
 }
 
-// JevPlanner queries the Jev / System-One decisions endpoint to formulate an AnalysisPlan.
-type JevPlanner struct {
+// SystemOnePlanner queries the System-One decisions endpoint to formulate an AnalysisPlan.
+type SystemOnePlanner struct {
 	decisionsURL string
 	apiKey       string
 	model        string
@@ -46,8 +46,8 @@ type JevPlanner struct {
 	planningLatency time.Duration
 }
 
-// NewJevPlanner constructs a JevPlanner instance.
-func NewJevPlanner(opts PlannerOptions) *JevPlanner {
+// NewSystemOnePlanner constructs a SystemOnePlanner instance.
+func NewSystemOnePlanner(opts PlannerOptions) *SystemOnePlanner {
 	decisionsURL := opts.DecisionsURL
 	if decisionsURL == "" {
 		decisionsURL = os.Getenv("OPENROUTER_BASE_URL")
@@ -93,7 +93,7 @@ func NewJevPlanner(opts PlannerOptions) *JevPlanner {
 		fallback = planning.NewDeterministicPlanner()
 	}
 
-	return &JevPlanner{
+	return &SystemOnePlanner{
 		decisionsURL: decisionsURL,
 		apiKey:       apiKey,
 		model:        model,
@@ -105,46 +105,46 @@ func NewJevPlanner(opts PlannerOptions) *JevPlanner {
 	}
 }
 
-func (jp *JevPlanner) Name() string {
-	return "jev"
+func (jp *SystemOnePlanner) Name() string {
+	return "system-one"
 }
 
 // CacheIdentity returns the non-secret provider details that affect planner
 // output. Credentials are intentionally excluded.
-func (jp *JevPlanner) CacheIdentity() (provider, model, endpoint string) {
-	return "jev", jp.model, jp.decisionsURL
+func (jp *SystemOnePlanner) CacheIdentity() (provider, model, endpoint string) {
+	return "system-one", jp.model, jp.decisionsURL
 }
 
 // Telemetry returns recorded planning request count and latency.
-func (jp *JevPlanner) Telemetry() (int, time.Duration) {
+func (jp *SystemOnePlanner) Telemetry() (int, time.Duration) {
 	jp.mu.Lock()
 	defer jp.mu.Unlock()
 	return jp.planningCalls, jp.planningLatency
 }
 
-type jevDecisionRequest struct {
-	Model     string                 `json:"model"`
-	State     string                 `json:"state"`
-	Questions map[string]jevQuestion `json:"questions"`
+type systemOneDecisionRequest struct {
+	Model     string                       `json:"model"`
+	State     string                       `json:"state"`
+	Questions map[string]systemOneQuestion `json:"questions"`
 }
 
-type jevQuestion struct {
+type systemOneQuestion struct {
 	Type         string            `json:"type"`
 	Instructions string            `json:"instructions"`
 	Criteria     map[string]string `json:"criteria"`
 }
 
-type jevDecisionResponse struct {
-	ID      string               `json:"id,omitempty"`
-	Model   string               `json:"model,omitempty"`
-	Answers map[string]jevAnswer `json:"answers"`
+type systemOneDecisionResponse struct {
+	ID      string                     `json:"id,omitempty"`
+	Model   string                     `json:"model,omitempty"`
+	Answers map[string]systemOneAnswer `json:"answers"`
 	Error   *struct {
 		Message string `json:"message"`
 		Code    int    `json:"code"`
 	} `json:"error,omitempty"`
 }
 
-type jevAnswer struct {
+type systemOneAnswer struct {
 	Type          string             `json:"type,omitempty"`
 	Noul          *float64           `json:"noul,omitempty"`
 	Choice        string             `json:"choice,omitempty"`
@@ -153,8 +153,8 @@ type jevAnswer struct {
 	Probabilities map[string]float64 `json:"probabilities,omitempty"`
 }
 
-// Plan consults Jev to decide priority and analysis mode for each candidate.
-func (jp *JevPlanner) Plan(ctx context.Context, cands []candidates.AnalysisCandidate, budget planning.AnalysisBudget) (planning.AnalysisPlan, error) {
+// Plan consults System-One to decide priority and analysis mode for each candidate.
+func (jp *SystemOnePlanner) Plan(ctx context.Context, cands []candidates.AnalysisCandidate, budget planning.AnalysisBudget) (planning.AnalysisPlan, error) {
 	if jp.mode == "disabled" || jp.apiKey == "" {
 		if jp.fallback != nil {
 			return jp.fallback.Plan(ctx, cands, budget)
@@ -179,7 +179,7 @@ func (jp *JevPlanner) Plan(ctx context.Context, cands []candidates.AnalysisCandi
 		plan, err := jp.planSingleCandidate(ctx, c, budget)
 		if err != nil {
 			if jp.mode == "required" {
-				return planning.AnalysisPlan{}, fmt.Errorf("Jev planning failed on candidate %s: %w", c.ID, err)
+				return planning.AnalysisPlan{}, fmt.Errorf("System-One planning failed on candidate %s: %w", c.ID, err)
 			}
 			// In optional mode, fallback to deterministic planning for this batch
 			return jp.fallback.Plan(ctx, cands, budget)
@@ -230,10 +230,10 @@ func (jp *JevPlanner) Plan(ctx context.Context, cands []candidates.AnalysisCandi
 	}, nil
 }
 
-func (jp *JevPlanner) planSingleCandidate(ctx context.Context, c candidates.AnalysisCandidate, budget planning.AnalysisBudget) (planning.CandidatePlan, error) {
+func (jp *SystemOnePlanner) planSingleCandidate(ctx context.Context, c candidates.AnalysisCandidate, budget planning.AnalysisBudget) (planning.CandidatePlan, error) {
 	state := formatCandidateState(c)
 
-	questions := map[string]jevQuestion{
+	questions := map[string]systemOneQuestion{
 		"should_analyze": {
 			Type:         "noul",
 			Instructions: "Does this candidate represent a potentially exploitable taint flow requiring deeper analysis?",
@@ -253,7 +253,7 @@ func (jp *JevPlanner) planSingleCandidate(ctx context.Context, c candidates.Anal
 		},
 	}
 
-	reqBody := jevDecisionRequest{
+	reqBody := systemOneDecisionRequest{
 		Model:     jp.model,
 		State:     state,
 		Questions: questions,
@@ -282,16 +282,16 @@ func (jp *JevPlanner) planSingleCandidate(ctx context.Context, c candidates.Anal
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return planning.CandidatePlan{}, fmt.Errorf("Jev decisions API returned status %d: %s", resp.StatusCode, string(body))
+		return planning.CandidatePlan{}, fmt.Errorf("System-One decisions API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var decResp jevDecisionResponse
+	var decResp systemOneDecisionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&decResp); err != nil {
-		return planning.CandidatePlan{}, fmt.Errorf("failed to decode Jev response: %w", err)
+		return planning.CandidatePlan{}, fmt.Errorf("failed to decode System-One response: %w", err)
 	}
 
 	if decResp.Error != nil {
-		return planning.CandidatePlan{}, fmt.Errorf("Jev API error (%d): %s", decResp.Error.Code, decResp.Error.Message)
+		return planning.CandidatePlan{}, fmt.Errorf("System-One API error (%d): %s", decResp.Error.Code, decResp.Error.Message)
 	}
 
 	// Extract answers
@@ -344,7 +344,7 @@ func (jp *JevPlanner) planSingleCandidate(ctx context.Context, c candidates.Anal
 		ControlFlow:          false,
 		VulnerabilityClasses: c.VulnerabilityClasses,
 		Reason:               reason,
-		PlannerProvider:      "jev",
+		PlannerProvider:      "system-one",
 		PlannerModel:         jp.model,
 	}, nil
 }

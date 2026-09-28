@@ -23,21 +23,21 @@ const (
 	DefaultExplainerModel = "openrouter/free"
 )
 
-// ClientOptions configures an OpenRouter inference client for Jev and LLM explanations.
+// ClientOptions configures an OpenRouter inference client for System-One and LLM explanations.
 type ClientOptions struct {
 	BaseURL        string
 	DecisionsURL   string
 	ChatURL        string
 	APIKey         string
 	Model          string // Alias/fallback for ExplainerModel
-	SystemOneModel string // Jev decision model (default: ~typesafe/jev-latest)
+	SystemOneModel string // System-One decision model (default: ~typesafe/jev-latest)
 	ExplainerModel string // Explainer LLM model (default: openrouter/free)
 	Timeout        time.Duration
 	Fallback       classifier.Classifier
 	Logger         *slog.Logger
 }
 
-// Client executes candidate classification via Jev (/api/alpha/decisions)
+// Client executes candidate classification via System-One (/api/alpha/decisions)
 // and enriches vulnerable findings with contextual descriptions via standard LLM chat completions.
 type Client struct {
 	decisionsURL   string
@@ -50,7 +50,7 @@ type Client struct {
 	logger         *slog.Logger
 }
 
-// NewClient creates a new client for Jev decisions and LLM explanations.
+// NewClient creates a new client for System-One decisions and LLM explanations.
 func NewClient(opts ClientOptions) *Client {
 	apiKey := opts.APIKey
 	if apiKey == "" {
@@ -145,33 +145,33 @@ func NewClient(opts ClientOptions) *Client {
 }
 
 func (c *Client) ModelName() string {
-	return "jev"
+	return "system-one"
 }
 
-// Jev Decision API Request and Response schema
-type jevDecisionRequest struct {
-	Model     string                 `json:"model"`
-	State     string                 `json:"state"`
-	Questions map[string]jevQuestion `json:"questions"`
+// System-One Decision API Request and Response schema
+type systemOneDecisionRequest struct {
+	Model     string                       `json:"model"`
+	State     string                       `json:"state"`
+	Questions map[string]systemOneQuestion `json:"questions"`
 }
 
-type jevQuestion struct {
+type systemOneQuestion struct {
 	Type         string      `json:"type"`               // "noul", "choice", or "score"
 	Instructions string      `json:"instructions"`       // question prompt
 	Criteria     interface{} `json:"criteria,omitempty"` // map[string]string or []string
 }
 
-type jevDecisionResponse struct {
-	ID      string               `json:"id,omitempty"`
-	Model   string               `json:"model,omitempty"`
-	Answers map[string]jevAnswer `json:"answers"`
+type systemOneDecisionResponse struct {
+	ID      string                     `json:"id,omitempty"`
+	Model   string                     `json:"model,omitempty"`
+	Answers map[string]systemOneAnswer `json:"answers"`
 	Error   *struct {
 		Message string `json:"message"`
 		Code    int    `json:"code"`
 	} `json:"error,omitempty"`
 }
 
-type jevAnswer struct {
+type systemOneAnswer struct {
 	Type          string             `json:"type,omitempty"`
 	Noul          *float64           `json:"noul,omitempty"`
 	Choice        string             `json:"choice,omitempty"`
@@ -207,7 +207,7 @@ type chatResponse struct {
 }
 
 // Classify executes the two-step triage workflow:
-// 1. Invokes Jev on OpenRouter's decisions endpoint (/api/alpha/decisions) to classify the candidate.
+// 1. Invokes System-One on OpenRouter's decisions endpoint (/api/alpha/decisions) to classify the candidate.
 // 2. If classified as a vulnerability, invokes a standard LLM (/api/v1/chat/completions) to explain what and why it is vulnerable.
 func (c *Client) Classify(ctx context.Context, input classifier.ClassificationInput) (classifier.ClassificationResult, error) {
 	if c.apiKey == "" {
@@ -218,7 +218,7 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 	}
 
 	// -------------------------------------------------------------------------
-	// Step 1: Execute Jev Decision Classification
+	// Step 1: Execute System-One Decision Classification
 	// -------------------------------------------------------------------------
 	targetCategory := input.Category
 	if targetCategory == "" {
@@ -228,7 +228,7 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 	state := formatCandidateState(input)
 
 	categoryReadable := strings.ReplaceAll(targetCategory, "_", " ")
-	questions := map[string]jevQuestion{
+	questions := map[string]systemOneQuestion{
 		"is_vulnerable": {
 			Type:         "noul",
 			Instructions: fmt.Sprintf("Does this code contain an exploitable %s vulnerability?", categoryReadable),
@@ -247,18 +247,18 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 		},
 	}
 
-	jevReq := jevDecisionRequest{
+	systemOneReq := systemOneDecisionRequest{
 		Model:     c.systemOneModel,
 		State:     state,
 		Questions: questions,
 	}
 
-	reqBytes, err := json.Marshal(jevReq)
+	reqBytes, err := json.Marshal(systemOneReq)
 	if err != nil {
 		if c.fallback != nil {
 			return c.fallback.Classify(ctx, input)
 		}
-		return classifier.ClassificationResult{}, fmt.Errorf("failed to marshal jev request: %w", err)
+		return classifier.ClassificationResult{}, fmt.Errorf("failed to marshal System-One request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.decisionsURL, bytes.NewReader(reqBytes))
@@ -266,7 +266,7 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 		if c.fallback != nil {
 			return c.fallback.Classify(ctx, input)
 		}
-		return classifier.ClassificationResult{}, fmt.Errorf("failed to create jev decisions request: %w", err)
+		return classifier.ClassificationResult{}, fmt.Errorf("failed to create System-One decisions request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -279,7 +279,7 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 		if c.fallback != nil {
 			return c.fallback.Classify(ctx, input)
 		}
-		return classifier.ClassificationResult{}, fmt.Errorf("jev decisions request failed: %w", err)
+		return classifier.ClassificationResult{}, fmt.Errorf("System-One decisions request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -288,30 +288,30 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 		if c.fallback != nil {
 			return c.fallback.Classify(ctx, input)
 		}
-		return classifier.ClassificationResult{}, fmt.Errorf("jev decisions returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+		return classifier.ClassificationResult{}, fmt.Errorf("System-One decisions returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	var jevResp jevDecisionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&jevResp); err != nil {
+	var systemOneResp systemOneDecisionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&systemOneResp); err != nil {
 		if c.fallback != nil {
 			return c.fallback.Classify(ctx, input)
 		}
-		return classifier.ClassificationResult{}, fmt.Errorf("failed to decode jev decisions response: %w", err)
+		return classifier.ClassificationResult{}, fmt.Errorf("failed to decode System-One decisions response: %w", err)
 	}
 
-	if jevResp.Error != nil {
+	if systemOneResp.Error != nil {
 		if c.fallback != nil {
 			return c.fallback.Classify(ctx, input)
 		}
-		return classifier.ClassificationResult{}, fmt.Errorf("jev decision API error (%d): %s", jevResp.Error.Code, jevResp.Error.Message)
+		return classifier.ClassificationResult{}, fmt.Errorf("System-One decision API error (%d): %s", systemOneResp.Error.Code, systemOneResp.Error.Message)
 	}
 
-	// Extract Label, Confidence, and Probabilities from Jev response
+	// Extract label, confidence, and probabilities from the System-One response.
 	var label string
 	var conf float64
 	var probs map[string]float64
 
-	if ans, ok := jevResp.Answers["classification"]; ok {
+	if ans, ok := systemOneResp.Answers["classification"]; ok {
 		label = ans.Choice
 		if ans.Probabilities != nil {
 			probs = ans.Probabilities
@@ -323,7 +323,7 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 		}
 	}
 
-	if isVulnAns, ok := jevResp.Answers["is_vulnerable"]; ok && isVulnAns.Noul != nil {
+	if isVulnAns, ok := systemOneResp.Answers["is_vulnerable"]; ok && isVulnAns.Noul != nil {
 		noulVal := *isVulnAns.Noul
 		if label == "" {
 			if noulVal >= 0.5 {
@@ -364,11 +364,11 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 	// If classified as safe_code, skip LLM explanation and return immediately
 	if label == "safe_code" {
 		return classifier.ClassificationResult{
-			Model:         "jev",
+			Model:         "system-one",
 			Label:         "safe_code",
 			Confidence:    conf,
 			Probabilities: probs,
-			Explanation:   "Candidate analyzed and classified as safe/mitigated code by Jev decision model.",
+			Explanation:   "Candidate analyzed and classified as safe/mitigated code by System-One decision model.",
 		}, nil
 	}
 
@@ -388,7 +388,7 @@ func (c *Client) Classify(ctx context.Context, input classifier.ClassificationIn
 	}
 
 	return classifier.ClassificationResult{
-		Model:         "jev",
+		Model:         "system-one",
 		Label:         label,
 		Confidence:    conf,
 		Probabilities: probs,
@@ -419,7 +419,7 @@ func (c *Client) explainVulnerability(ctx context.Context, input classifier.Clas
 	if input.Evidence.Code != "" {
 		userPrompt.WriteString(fmt.Sprintf("Code Snippet:\n```\n%s\n```\n", input.Evidence.Code))
 	}
-	userPrompt.WriteString(fmt.Sprintf("Jev Decision Verdict: %s (Confidence: %.0f%%)\n\n", label, conf*100))
+	userPrompt.WriteString(fmt.Sprintf("System-One Decision Verdict: %s (Confidence: %.0f%%)\n\n", label, conf*100))
 	userPrompt.WriteString("Explain what this vulnerability is and why this code is vulnerable.")
 
 	chatReq := chatRequest{

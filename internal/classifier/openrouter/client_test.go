@@ -17,7 +17,7 @@ import (
 )
 
 func TestOpenRouterClientTwoStepPipeline(t *testing.T) {
-	var jevCalled bool
+	var systemOneCalled bool
 	var explainerCalled bool
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,8 +29,8 @@ func TestOpenRouterClientTwoStepPipeline(t *testing.T) {
 		}
 
 		if strings.Contains(r.URL.Path, "decisions") {
-			jevCalled = true
-			var decReq jevDecisionRequest
+			systemOneCalled = true
+			var decReq systemOneDecisionRequest
 			if err := json.NewDecoder(r.Body).Decode(&decReq); err != nil {
 				t.Fatalf("failed to decode decisions request: %v", err)
 			}
@@ -44,10 +44,10 @@ func TestOpenRouterClientTwoStepPipeline(t *testing.T) {
 
 			noulVal := 0.96
 			confVal := 0.96
-			decResp := jevDecisionResponse{
+			decResp := systemOneDecisionResponse{
 				ID:    "gen-dec-12345",
 				Model: SystemOneModel,
-				Answers: map[string]jevAnswer{
+				Answers: map[string]systemOneAnswer{
 					"is_vulnerable": {
 						Type: "noul",
 						Noul: &noulVal,
@@ -131,15 +131,15 @@ func TestOpenRouterClientTwoStepPipeline(t *testing.T) {
 		t.Fatalf("unexpected classify error: %v", err)
 	}
 
-	if !jevCalled {
-		t.Error("expected Jev decisions endpoint to be invoked")
+	if !systemOneCalled {
+		t.Error("expected System-One decisions endpoint to be invoked")
 	}
 	if !explainerCalled {
 		t.Error("expected LLM explainer endpoint to be invoked")
 	}
 
-	if res.Model != "jev" {
-		t.Errorf("expected model jev, got %s", res.Model)
+	if res.Model != "system-one" {
+		t.Errorf("expected model system-one, got %s", res.Model)
 	}
 	if res.Label != "command_injection" {
 		t.Errorf("expected label command_injection, got %s", res.Label)
@@ -159,10 +159,10 @@ func TestOpenRouterClientSafeCodeSkipsExplanation(t *testing.T) {
 		if strings.Contains(r.URL.Path, "decisions") {
 			noulVal := 0.05
 			confVal := 0.95
-			decResp := jevDecisionResponse{
+			decResp := systemOneDecisionResponse{
 				ID:    "gen-dec-safe",
 				Model: SystemOneModel,
-				Answers: map[string]jevAnswer{
+				Answers: map[string]systemOneAnswer{
 					"is_vulnerable": {
 						Type: "noul",
 						Noul: &noulVal,
@@ -217,8 +217,8 @@ func TestOpenRouterClientExplainerErrorResilience(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "decisions") {
 			noulVal := 0.95
-			decResp := jevDecisionResponse{
-				Answers: map[string]jevAnswer{
+			decResp := systemOneDecisionResponse{
+				Answers: map[string]systemOneAnswer{
 					"classification": {
 						Choice: "sql_injection",
 						Probabilities: map[string]float64{
@@ -261,7 +261,7 @@ func TestOpenRouterClientExplainerErrorResilience(t *testing.T) {
 	if res.Explanation != "" {
 		t.Errorf("expected no generated explanation when explainer fails, got: %s", res.Explanation)
 	}
-	if strings.Contains(res.Explanation, "Vulnerability classified by Jev decision model") {
+	if strings.Contains(res.Explanation, "Vulnerability classified by System-One decision model") {
 		t.Errorf("expected the old generic classifier fallback to be absent, got: %s", res.Explanation)
 	}
 	if !strings.Contains(logOutput.String(), "HTTP 429") {

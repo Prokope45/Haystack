@@ -4,7 +4,7 @@ import (
 	"haystack/internal/analyzer"
 )
 
-// CandidateFinding represents a rule match before Kev classifier adjudication.
+// CandidateFinding represents a rule match before classifier adjudication.
 type CandidateFinding struct {
 	RuleID          string            `json:"rule_id"`
 	RuleName        string            `json:"rule_name"`
