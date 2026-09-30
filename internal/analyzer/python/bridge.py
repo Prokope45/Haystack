@@ -8,6 +8,7 @@ import re
 SECRET_REGEX = re.compile(r'(?i)(api[_-]?key|secret[_-]?key|auth[_-]?token|passwd|password|private[_-]?key)')
 
 def get_call_name(node):
+    """Return the dotted callable name represented by an AST node."""
     if isinstance(node, ast.Name):
         return node.id
     elif isinstance(node, ast.Attribute):
@@ -16,6 +17,7 @@ def get_call_name(node):
     return ""
 
 def get_node_source_name(node):
+    """Return the display name used when an AST node is recognized as a source."""
     if isinstance(node, ast.Call):
         return get_call_name(node.func)
     elif isinstance(node, ast.Subscript):
@@ -28,6 +30,7 @@ def get_node_source_name(node):
     return ""
 
 def is_source_node(node):
+    """Classify recognized HTTP, CLI, and environment expressions as input sources."""
     name = get_node_source_name(node)
     call_name = get_call_name(node.func) if isinstance(node, ast.Call) else ""
     
@@ -62,6 +65,7 @@ def is_source_node(node):
     return None
 
 def is_sink_node(node):
+    """Classify a call as a sink and return only the arguments relevant to that sink."""
     if not isinstance(node, ast.Call):
         return None, []
     
@@ -108,145 +112,164 @@ def is_sink_node(node):
     return None, []
 
 def collect_referenced_vars(node):
+    """Collect loaded variable names referenced by an expression."""
     names = set()
     for child in ast.walk(node):
         if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
             names.add(child.id)
     return names
 
+def hardcoded_secret_evidence(stmt, target_name, file_path, source_lines):
+    """Build evidence for a qualifying secret-like name assigned a string constant."""
+    if not SECRET_REGEX.search(target_name) or not isinstance(stmt.value, ast.Constant):
+        return None
+    value = str(stmt.value.value)
+    if len(value) < 6 or " " in value or "%" in value:
+        return None
+
+    line_no = stmt.lineno
+    column = stmt.col_offset + 1
+    code = source_lines[line_no - 1].strip() if line_no <= len(source_lines) else ""
+    return {
+        "file": file_path,
+        "line": line_no,
+        "column": column,
+        "language": "python",
+        "source": {
+            "type": "hardcoded_secret",
+            "name": target_name,
+            "line": line_no,
+            "column": column,
+            "detail": "Hardcoded secret string assigned to variable"
+        },
+        "sink": {
+            "type": "shell_execution",
+            "name": target_name,
+            "line": line_no,
+            "column": column,
+            "detail": "Secret in source code"
+        },
+        "flow_steps": [f"Hardcoded secret literal assigned to {target_name}"],
+        "code": code
+    }
+
+def analyze_assignment(stmt, target_name, taints):
+    """Update one scope's taint map from a direct source or a propagated assignment."""
+    source = is_source_node(stmt.value)
+    if source:
+        source["line"] = stmt.lineno
+        source["column"] = stmt.col_offset + 1
+        taints[target_name] = {
+            "source": source,
+            "operations": [],
+            "flow_steps": [f"source: {source['name']} ({source['type']})"]
+        }
+        return
+
+    ref_vars = collect_referenced_vars(stmt.value)
+    for ref_var in ref_vars:
+        if ref_var not in taints:
+            continue
+        taint = taints[ref_var]
+        operation_type = "assignment"
+        if isinstance(stmt.value, ast.BinOp):
+            operation_type = "concatenation"
+        elif isinstance(stmt.value, ast.JoinedStr): # f-string
+            operation_type = "format_string"
+        elif isinstance(stmt.value, ast.Call):
+            operation_type = "function_call"
+
+        operations = list(taint["operations"])
+        operations.append({
+            "type": operation_type,
+            "detail": ast.unparse(stmt.value) if hasattr(ast, "unparse") else operation_type,
+            "line": stmt.lineno
+        })
+        flow_steps = list(taint["flow_steps"])
+        flow_steps.append(f"{operation_type} ({ast.unparse(stmt.value) if hasattr(ast, 'unparse') else target_name})")
+        taints[target_name] = {
+            "source": taint["source"],
+            "operations": operations,
+            "flow_steps": flow_steps
+        }
+        break
+
+def analyze_sink_flows(stmt, taints, file_path, source_lines, evidences):
+    """Find sinks inside a statement and append direct-source or tracked-taint evidence."""
+    for node in ast.walk(stmt):
+        sink_info, args = is_sink_node(node)
+        if not sink_info:
+            continue
+        sink_info["line"] = node.lineno
+        sink_info["column"] = node.col_offset + 1
+        for arg in args:
+            source = is_source_node(arg)
+            line_no = node.lineno
+            code = source_lines[line_no - 1].strip() if line_no <= len(source_lines) else ""
+            if source:
+                source["line"] = arg.lineno
+                source["column"] = arg.col_offset + 1
+                evidences.append({
+                    "file": file_path,
+                    "line": sink_info["line"],
+                    "column": sink_info["column"],
+                    "language": "python",
+                    "source": source,
+                    "sink": sink_info,
+                    "operations": [],
+                    "flow_steps": [
+                        f"source: {source['name']} ({source['type']})",
+                        f"sink: {sink_info['name']} ({sink_info['type']})"
+                    ],
+                    "code": code
+                })
+                break
+
+            ref_vars = collect_referenced_vars(arg)
+            for ref_var in ref_vars:
+                if ref_var not in taints:
+                    continue
+                taint = taints[ref_var]
+                steps = list(taint["flow_steps"])
+                steps.append(f"sink: {sink_info['name']} ({sink_info['type']})")
+                evidences.append({
+                    "file": file_path,
+                    "line": sink_info["line"],
+                    "column": sink_info["column"],
+                    "language": "python",
+                    "source": taint["source"],
+                    "sink": sink_info,
+                    "operations": taint["operations"],
+                    "flow_steps": steps,
+                    "code": code
+                })
+                break
+
 def analyze_scope(statements, file_path, source_lines):
+    """Run the intraprocedural assignment and sink checks with an isolated taint map."""
     evidences = []
     # Map var_name -> {"source": ..., "flow_steps": [...], "operations": [...]}
     taints = {}
 
     for stmt in statements:
-        # Check hardcoded secrets in assignments
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
                 if isinstance(target, ast.Name):
                     target_name = target.id
-                    if SECRET_REGEX.search(target_name) and isinstance(stmt.value, ast.Constant):
-                        val = str(stmt.value.value)
-                        if len(val) >= 6 and " " not in val and "%" not in val:
-                            line_no = stmt.lineno
-                            code = source_lines[line_no - 1].strip() if line_no <= len(source_lines) else ""
-                            evidences.append({
-                                "file": file_path,
-                                "line": line_no,
-                                "column": stmt.col_offset + 1,
-                                "language": "python",
-                                "source": {
-                                    "type": "hardcoded_secret",
-                                    "name": target_name,
-                                    "line": line_no,
-                                    "column": stmt.col_offset + 1,
-                                    "detail": "Hardcoded secret string assigned to variable"
-                                },
-                                "sink": {
-                                    "type": "shell_execution",
-                                    "name": target_name,
-                                    "line": line_no,
-                                    "column": stmt.col_offset + 1,
-                                    "detail": "Secret in source code"
-                                },
-                                "flow_steps": [f"Hardcoded secret literal assigned to {target_name}"],
-                                "code": code
-                            })
+                    secret = hardcoded_secret_evidence(stmt, target_name, file_path, source_lines)
+                    if secret:
+                        evidences.append(secret)
+                    analyze_assignment(stmt, target_name, taints)
 
-                    # Check if assigned value is a direct source
-                    src = is_source_node(stmt.value)
-                    if src:
-                        src["line"] = stmt.lineno
-                        src["column"] = stmt.col_offset + 1
-                        taints[target_name] = {
-                            "source": src,
-                            "operations": [],
-                            "flow_steps": [f"source: {src['name']} ({src['type']})"]
-                        }
-                    else:
-                        # Check propagation
-                        ref_vars = collect_referenced_vars(stmt.value)
-                        for rv in ref_vars:
-                            if rv in taints:
-                                t_info = taints[rv]
-                                op_type = "assignment"
-                                if isinstance(stmt.value, ast.BinOp):
-                                    op_type = "concatenation"
-                                elif isinstance(stmt.value, ast.JoinedStr): # f-string
-                                    op_type = "format_string"
-                                elif isinstance(stmt.value, ast.Call):
-                                    op_type = "function_call"
-
-                                new_ops = list(t_info["operations"])
-                                new_ops.append({
-                                    "type": op_type,
-                                    "detail": ast.unparse(stmt.value) if hasattr(ast, "unparse") else op_type,
-                                    "line": stmt.lineno
-                                })
-                                new_steps = list(t_info["flow_steps"])
-                                new_steps.append(f"{op_type} ({ast.unparse(stmt.value) if hasattr(ast, 'unparse') else target_name})")
-                                taints[target_name] = {
-                                    "source": t_info["source"],
-                                    "operations": new_ops,
-                                    "flow_steps": new_steps
-                                }
-                                break
-
-        # Check call sinks
-        for node in ast.walk(stmt):
-            sink_info, args = is_sink_node(node)
-            if sink_info:
-                sink_info["line"] = node.lineno
-                sink_info["column"] = node.col_offset + 1
-                for arg in args:
-                    # Check direct source
-                    src = is_source_node(arg)
-                    line_no = node.lineno
-                    code = source_lines[line_no - 1].strip() if line_no <= len(source_lines) else ""
-                    if src:
-                        src["line"] = arg.lineno
-                        src["column"] = arg.col_offset + 1
-                        evidences.append({
-                            "file": file_path,
-                            "line": sink_info["line"],
-                            "column": sink_info["column"],
-                            "language": "python",
-                            "source": src,
-                            "sink": sink_info,
-                            "operations": [],
-                            "flow_steps": [
-                                f"source: {src['name']} ({src['type']})",
-                                f"sink: {sink_info['name']} ({sink_info['type']})"
-                            ],
-                            "code": code
-                        })
-                        break
-
-                    # Check tainted var
-                    ref_vars = collect_referenced_vars(arg)
-                    for rv in ref_vars:
-                        if rv in taints:
-                            t_info = taints[rv]
-                            steps = list(t_info["flow_steps"])
-                            steps.append(f"sink: {sink_info['name']} ({sink_info['type']})")
-                            evidences.append({
-                                "file": file_path,
-                                "line": sink_info["line"],
-                                "column": sink_info["column"],
-                                "language": "python",
-                                "source": t_info["source"],
-                                "sink": sink_info,
-                                "operations": t_info["operations"],
-                                "flow_steps": steps,
-                                "code": code
-                            })
-                            break
+        analyze_sink_flows(stmt, taints, file_path, source_lines, evidences)
     return evidences
 
 def node_text(node):
+    """Render an AST node as source-like text, with an AST dump fallback."""
     return ast.unparse(node) if hasattr(ast, "unparse") else ast.dump(node)
 
 def taint_from_source(source, node):
+    """Initialize interprocedural taint state and its source location from an AST node."""
     return {
         "source": dict(source, line=getattr(node, "lineno", 0), column=getattr(node, "col_offset", 0) + 1),
         "operations": [],
@@ -255,6 +278,7 @@ def taint_from_source(source, node):
     }
 
 def taint_operation(taint, kind, detail, node, crossed=False):
+    """Copy a taint trace and append an operation, optionally marking a function boundary."""
     result = {
         "source": taint["source"],
         "operations": list(taint["operations"]),
@@ -270,68 +294,87 @@ def taint_operation(taint, kind, detail, node, crossed=False):
     return result
 
 def local_call_name(node):
+    """Return the local function or method name used for interprocedural matching."""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
         return node.attr
     return ""
 
-def analyze_interprocedural(tree, file_path, source_lines, max_depth):
-    functions = {}
-    all_functions = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            functions.setdefault(node.name, []).append(node)
-            all_functions.append(node)
+class InterproceduralAnalyzer:
+    """Interpret same-file function calls while carrying source taint between scopes."""
 
-    def resolve(call):
+    def __init__(self, tree, file_path, source_lines, max_depth):
+        """Index functions and initialize traversal, evidence, and resource-limit state."""
+        self.file_path = file_path
+        self.source_lines = source_lines
+        self.max_depth = max_depth
+        self.functions = {}
+        self.all_functions = []
+        self.evidences = []
+        self.seen = set()
+        self.invocation_count = 0
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.functions.setdefault(node.name, []).append(node)
+                self.all_functions.append(node)
+        self.roots = self.discover_roots()
+
+    def analyze(self):
+        """Invoke discovered roots within the budget and return accumulated evidence."""
+        for fn in self.all_functions:
+            if fn in self.roots and self.invocation_count < 500:
+                self.invoke(fn, {}, 0, set())
+        return self.evidences
+
+    def resolve_call(self, call):
+        """Resolve a call only when its local function name identifies one declaration."""
         if not isinstance(call, ast.Call):
             return None
-        matches = functions.get(local_call_name(call.func), [])
+        matches = self.functions.get(local_call_name(call.func), [])
         return matches[0] if len(matches) == 1 else None
 
-    source_functions = set()
-    callers = {}
-    for fn in all_functions:
-        args = list(fn.args.posonlyargs) + list(fn.args.args)
-        if any(arg.arg in ("request", "req") for arg in args):
-            # Include common request handlers as roots; matched source expressions
-            # introduce taint with their precise source location during analysis.
-            source_functions.add(fn)
-        for node in ast.walk(fn):
-            if is_source_node(node):
+    def discover_roots(self):
+        """Find source-bearing functions and callers that can reach those functions."""
+        source_functions = set()
+        callers = {}
+        for fn in self.all_functions:
+            args = list(fn.args.posonlyargs) + list(fn.args.args)
+            if any(arg.arg in ("request", "req") for arg in args):
+                # Request handlers are roots; matched expressions add precise taint later.
                 source_functions.add(fn)
-            if isinstance(node, ast.Call):
-                callee = resolve(node)
-                if callee is not None:
-                    callers.setdefault(callee, set()).add(fn)
+            for node in ast.walk(fn):
+                if is_source_node(node):
+                    source_functions.add(fn)
+                if isinstance(node, ast.Call):
+                    callee = self.resolve_call(node)
+                    if callee is not None:
+                        callers.setdefault(callee, set()).add(fn)
 
-    roots = set(source_functions)
-    queue = list(source_functions)
-    while queue:
-        fn = queue.pop()
-        for caller in callers.get(fn, ()):
-            if caller not in roots:
-                roots.add(caller)
-                queue.append(caller)
+        roots = set(source_functions)
+        queue = list(source_functions)
+        while queue:
+            fn = queue.pop()
+            for caller in callers.get(fn, ()):
+                if caller not in roots:
+                    roots.add(caller)
+                    queue.append(caller)
+        return roots
 
-    evidences = []
-    seen = set()
-    invocation_count = [0]
-
-    def add_evidence(sink, taint, call):
+    def add_evidence(self, sink, taint, call):
+        """Deduplicate a cross-function sink flow and append its evidence record."""
         line = getattr(call, "lineno", 0)
         column = getattr(call, "col_offset", 0) + 1
         source = taint["source"]
         key = (source.get("name"), source.get("line"), line, column, sink["type"])
-        if key in seen:
+        if key in self.seen:
             return
-        seen.add(key)
-        code = source_lines[line - 1].strip() if 0 < line <= len(source_lines) else node_text(call)
+        self.seen.add(key)
+        code = self.source_lines[line - 1].strip() if 0 < line <= len(self.source_lines) else node_text(call)
         steps = list(taint["flow_steps"])
         steps.append(f"sink: {sink['name']} ({sink['type']})")
-        evidences.append({
-            "file": file_path,
+        self.evidences.append({
+            "file": self.file_path,
             "line": line,
             "column": column,
             "language": "python",
@@ -342,8 +385,9 @@ def analyze_interprocedural(tree, file_path, source_lines, max_depth):
             "code": code,
         })
 
-    def eval_expr(node, state, depth, stack):
-        if node is None or invocation_count[0] >= 500:
+    def eval_expr(self, node, state, depth, stack):
+        """Interpret an expression, propagating taint and emitting crossed sink flows."""
+        if node is None or self.invocation_count >= 500:
             return None
         source = is_source_node(node)
         if source:
@@ -351,47 +395,23 @@ def analyze_interprocedural(tree, file_path, source_lines, max_depth):
         if isinstance(node, ast.Name):
             return state.get(node.id)
         if isinstance(node, ast.Attribute):
-            return state.get(node_text(node)) or eval_expr(node.value, state, depth, stack)
+            return state.get(node_text(node)) or self.eval_expr(node.value, state, depth, stack)
         if isinstance(node, ast.Subscript):
-            return eval_expr(node.value, state, depth, stack) or eval_expr(node.slice, state, depth, stack)
+            return self.eval_expr(node.value, state, depth, stack) or self.eval_expr(node.slice, state, depth, stack)
         if isinstance(node, ast.Call):
             sink, args = is_sink_node(node)
             if sink:
                 for arg in args:
-                    taint = eval_expr(arg, state, depth, stack)
+                    taint = self.eval_expr(arg, state, depth, stack)
                     if taint and taint["crossed"]:
-                        add_evidence(sink, taint, node)
+                        self.add_evidence(sink, taint, node)
                         break
                 return None
 
-            callee = resolve(node)
-            if callee is not None and depth < max_depth:
-                call_inputs = {}
-                params = list(callee.args.posonlyargs) + list(callee.args.args) + list(callee.args.kwonlyargs)
-                actuals = list(node.args)
-                if isinstance(node.func, ast.Attribute) and params and params[0].arg in ("self", "cls"):
-                    actuals.insert(0, node.func.value)
-                for index, param in enumerate(params):
-                    actual = actuals[index] if index < len(actuals) else None
-                    taint = eval_expr(actual, state, depth, stack)
-                    if taint:
-                        call_inputs[param.arg] = taint_operation(
-                            taint, "argument_passing", f"{local_call_name(node.func)} -> {param.arg}", node, True
-                        )
-                        prefix = node_text(actual) + "."
-                        for name, field_taint in state.items():
-                            if name.startswith(prefix):
-                                call_inputs[param.arg + name[len(node_text(actual)):]] = taint_operation(
-                                    field_taint, "argument_passing", f"{local_call_name(node.func)} -> {param.arg}", node, True
-                                )
-                for keyword in node.keywords:
-                    if keyword.arg:
-                        taint = eval_expr(keyword.value, state, depth, stack)
-                        if taint:
-                            call_inputs[keyword.arg] = taint_operation(
-                                taint, "argument_passing", f"{local_call_name(node.func)} -> {keyword.arg}", node, True
-                            )
-                result = invoke(callee, call_inputs, depth + 1, stack)
+            callee = self.resolve_call(node)
+            if callee is not None and depth < self.max_depth:
+                call_inputs = self.map_call_arguments(node, callee, state, depth, stack)
+                result = self.invoke(callee, call_inputs, depth + 1, stack)
                 if result:
                     return taint_operation(
                         result, "return_value", f"{callee.name} returns to {local_call_name(node.func)}", node, True
@@ -400,39 +420,67 @@ def analyze_interprocedural(tree, file_path, source_lines, max_depth):
 
             result = None
             for arg in node.args:
-                taint = eval_expr(arg, state, depth, stack)
+                taint = self.eval_expr(arg, state, depth, stack)
                 if taint and result is None:
                     result = taint
             if result:
                 return taint_operation(result, "function_call", node_text(node), node)
             return None
         if isinstance(node, ast.BinOp):
-            left = eval_expr(node.left, state, depth, stack)
-            right = eval_expr(node.right, state, depth, stack)
+            left = self.eval_expr(node.left, state, depth, stack)
+            right = self.eval_expr(node.right, state, depth, stack)
             taint = left or right
             return taint_operation(taint, "concatenation", node_text(node), node) if taint else None
         if isinstance(node, ast.JoinedStr):
             for value in node.values:
-                taint = eval_expr(value, state, depth, stack)
+                taint = self.eval_expr(value, state, depth, stack)
                 if taint:
                     return taint_operation(taint, "format_string", node_text(node), node)
         if isinstance(node, ast.FormattedValue):
-            return eval_expr(node.value, state, depth, stack)
+            return self.eval_expr(node.value, state, depth, stack)
         if isinstance(node, (ast.UnaryOp, ast.Await, ast.Starred)):
-            return eval_expr(node.operand if hasattr(node, "operand") else node.value, state, depth, stack)
+            return self.eval_expr(node.operand if hasattr(node, "operand") else node.value, state, depth, stack)
         if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
             for item in node.elts:
-                taint = eval_expr(item, state, depth, stack)
+                taint = self.eval_expr(item, state, depth, stack)
                 if taint:
                     return taint_operation(taint, "composite_value", node_text(node), node)
         if isinstance(node, ast.Dict):
             for item in node.values:
-                taint = eval_expr(item, state, depth, stack)
+                taint = self.eval_expr(item, state, depth, stack)
                 if taint:
                     return taint_operation(taint, "composite_value", node_text(node), node)
         return None
 
-    def assign_target(target, taint, state):
+    def map_call_arguments(self, call, callee, state, depth, stack):
+        """Map tainted positional, receiver, field, and keyword inputs to callee parameters."""
+        call_inputs = {}
+        params = list(callee.args.posonlyargs) + list(callee.args.args) + list(callee.args.kwonlyargs)
+        actuals = list(call.args)
+        if isinstance(call.func, ast.Attribute) and params and params[0].arg in ("self", "cls"):
+            actuals.insert(0, call.func.value)
+        for index, param in enumerate(params):
+            actual = actuals[index] if index < len(actuals) else None
+            taint = self.eval_expr(actual, state, depth, stack)
+            if taint:
+                detail = f"{local_call_name(call.func)} -> {param.arg}"
+                call_inputs[param.arg] = taint_operation(taint, "argument_passing", detail, call, True)
+                prefix = node_text(actual) + "."
+                for name, field_taint in state.items():
+                    if name.startswith(prefix):
+                        call_inputs[param.arg + name[len(node_text(actual)):]] = taint_operation(
+                            field_taint, "argument_passing", detail, call, True
+                        )
+        for keyword in call.keywords:
+            if keyword.arg:
+                taint = self.eval_expr(keyword.value, state, depth, stack)
+                if taint:
+                    detail = f"{local_call_name(call.func)} -> {keyword.arg}"
+                    call_inputs[keyword.arg] = taint_operation(taint, "argument_passing", detail, call, True)
+        return call_inputs
+
+    def assign_target(self, target, taint, state):
+        """Bind or clear taint for a supported name, attribute, subscript, or tuple target."""
         if isinstance(target, ast.Name):
             state.pop(target.id, None)
             if taint:
@@ -444,75 +492,77 @@ def analyze_interprocedural(tree, file_path, source_lines, max_depth):
                 state[name] = taint
         elif isinstance(target, (ast.Tuple, ast.List)):
             for item in target.elts:
-                assign_target(item, taint, state)
+                self.assign_target(item, taint, state)
 
-    def process_block(statements, state, depth, stack, returns):
+    def process_block(self, statements, state, depth, stack, returns):
+        """Interpret supported statements in order, updating state and collecting returns."""
         for stmt in statements:
-            if invocation_count[0] >= 500:
+            if self.invocation_count >= 500:
                 return
             if isinstance(stmt, ast.Assign):
-                taint = eval_expr(stmt.value, state, depth, stack)
+                taint = self.eval_expr(stmt.value, state, depth, stack)
                 for target in stmt.targets:
-                    assign_target(target, taint, state)
+                    self.assign_target(target, taint, state)
             elif isinstance(stmt, ast.AnnAssign):
-                assign_target(stmt.target, eval_expr(stmt.value, state, depth, stack), state)
+                self.assign_target(stmt.target, self.eval_expr(stmt.value, state, depth, stack), state)
             elif isinstance(stmt, ast.AugAssign):
-                taint = eval_expr(stmt.value, state, depth, stack) or eval_expr(stmt.target, state, depth, stack)
-                assign_target(stmt.target, taint, state)
+                taint = self.eval_expr(stmt.value, state, depth, stack) or self.eval_expr(stmt.target, state, depth, stack)
+                self.assign_target(stmt.target, taint, state)
             elif isinstance(stmt, ast.Expr):
-                eval_expr(stmt.value, state, depth, stack)
+                self.eval_expr(stmt.value, state, depth, stack)
             elif isinstance(stmt, ast.Return):
-                taint = eval_expr(stmt.value, state, depth, stack)
+                taint = self.eval_expr(stmt.value, state, depth, stack)
                 if taint:
                     returns.append(taint)
             elif isinstance(stmt, ast.If):
-                eval_expr(stmt.test, state, depth, stack)
+                self.eval_expr(stmt.test, state, depth, stack)
                 left, right = dict(state), dict(state)
-                process_block(stmt.body, left, depth, stack, returns)
-                process_block(stmt.orelse, right, depth, stack, returns)
+                self.process_block(stmt.body, left, depth, stack, returns)
+                self.process_block(stmt.orelse, right, depth, stack, returns)
                 state.update(left)
                 state.update(right)
             elif isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
                 if isinstance(stmt, ast.While):
-                    eval_expr(stmt.test, state, depth, stack)
+                    self.eval_expr(stmt.test, state, depth, stack)
                 else:
-                    eval_expr(stmt.iter, state, depth, stack)
-                process_block(stmt.body, state, depth, stack, returns)
-                process_block(stmt.orelse, state, depth, stack, returns)
+                    self.eval_expr(stmt.iter, state, depth, stack)
+                self.process_block(stmt.body, state, depth, stack, returns)
+                self.process_block(stmt.orelse, state, depth, stack, returns)
             elif isinstance(stmt, (ast.With, ast.AsyncWith)):
                 for item in stmt.items:
-                    taint = eval_expr(item.context_expr, state, depth, stack)
+                    taint = self.eval_expr(item.context_expr, state, depth, stack)
                     if item.optional_vars:
-                        assign_target(item.optional_vars, taint, state)
-                process_block(stmt.body, state, depth, stack, returns)
+                        self.assign_target(item.optional_vars, taint, state)
+                self.process_block(stmt.body, state, depth, stack, returns)
             elif isinstance(stmt, ast.Try):
-                process_block(stmt.body, state, depth, stack, returns)
+                self.process_block(stmt.body, state, depth, stack, returns)
                 for handler in stmt.handlers:
-                    process_block(handler.body, state, depth, stack, returns)
-                process_block(stmt.orelse, state, depth, stack, returns)
-                process_block(stmt.finalbody, state, depth, stack, returns)
+                    self.process_block(handler.body, state, depth, stack, returns)
+                self.process_block(stmt.orelse, state, depth, stack, returns)
+                self.process_block(stmt.finalbody, state, depth, stack, returns)
             elif isinstance(stmt, ast.Match):
-                eval_expr(stmt.subject, state, depth, stack)
+                self.eval_expr(stmt.subject, state, depth, stack)
                 for case in stmt.cases:
-                    process_block(case.body, state, depth, stack, returns)
+                    self.process_block(case.body, state, depth, stack, returns)
 
-    def invoke(fn, inputs, depth, stack):
-        if depth > max_depth or fn in stack or invocation_count[0] >= 500:
+    def invoke(self, fn, inputs, depth, stack):
+        """Interpret one function invocation if its depth, cycle, and budget limits permit it."""
+        if depth > self.max_depth or fn in stack or self.invocation_count >= 500:
             return None
-        invocation_count[0] += 1
+        self.invocation_count += 1
         stack.add(fn)
         state = dict(inputs)
         returns = []
-        process_block(fn.body, state, depth, stack, returns)
+        self.process_block(fn.body, state, depth, stack, returns)
         stack.remove(fn)
         return returns[0] if returns else None
 
-    for fn in all_functions:
-        if fn in roots and invocation_count[0] < 500:
-            invoke(fn, {}, 0, set())
-    return evidences
+def analyze_interprocedural(tree, file_path, source_lines, max_depth):
+    """Run the stateful interprocedural interpreter for a parsed module."""
+    return InterproceduralAnalyzer(tree, file_path, source_lines, max_depth).analyze()
 
 def main():
+    """Read bridge input, run both analysis passes, deduplicate findings, and emit JSON."""
     if len(sys.argv) < 2:
         file_path = "<stdin>"
         content = sys.stdin.read()

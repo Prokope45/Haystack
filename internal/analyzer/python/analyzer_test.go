@@ -3,6 +3,7 @@ package python
 import (
 	"context"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"haystack/internal/analyzer"
@@ -237,5 +238,67 @@ API_KEY = "sk_live_98374982734982734"
 	}
 	if evidences[0].Source.Type != analyzer.SourceHardcoded {
 		t.Errorf("expected SourceHardcoded, got %v", evidences[0].Source.Type)
+	}
+}
+
+func TestPythonAnalyzerSkipsInactiveFileDirective(t *testing.T) {
+	pa := NewPythonAnalyzer()
+	pa.PythonBinary = "python-that-must-not-run"
+	pa.SetDirectives(map[string]analyzer.AnalysisDirectives{
+		"app_py-candidate": {Analyze: false},
+	})
+
+	evidences, err := pa.Analyze(context.Background(), []byte("pass\n"), "app.py")
+	if err != nil {
+		t.Fatalf("inactive file directive should skip bridge execution, got error: %v", err)
+	}
+	if len(evidences) != 0 {
+		t.Fatalf("expected no evidences for inactive file directive, got %#v", evidences)
+	}
+}
+
+func TestPythonAnalyzerAppliesLineMatchedDirectiveMetadata(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found in PATH")
+	}
+	pa := NewPythonAnalyzer()
+	pa.SetDirectives(map[string]analyzer.AnalysisDirectives{
+		"app_py-candidate": {Analyze: true, CandidateID: "candidate-5", Mode: "targeted"},
+	})
+	code := "import subprocess\n\n\ndef run():\n    subprocess.run(input(), shell=True)\n"
+
+	evidences, err := pa.Analyze(context.Background(), []byte(code), "app.py")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(evidences) != 1 {
+		t.Fatalf("expected one evidence, got %d: %#v", len(evidences), evidences)
+	}
+	if evidences[0].CandidateID != "candidate-5" || evidences[0].Mode != "targeted" {
+		t.Fatalf("expected matching directive metadata, got candidate=%q mode=%q", evidences[0].CandidateID, evidences[0].Mode)
+	}
+}
+
+func TestPythonAnalyzerSyntaxError(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found in PATH")
+	}
+	_, err := NewPythonAnalyzer().Analyze(context.Background(), []byte("def broken(:\n"), "broken.py")
+	if err == nil || !strings.Contains(err.Error(), "python syntax error in broken.py:") {
+		t.Fatalf("expected Python syntax error, got %v", err)
+	}
+}
+
+func TestPythonAnalyzerInvalidBridgeOutput(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found in PATH")
+	}
+	previousBridge := bridgeScript
+	bridgeScript = "print('not json')"
+	defer func() { bridgeScript = previousBridge }()
+
+	_, err := NewPythonAnalyzer().Analyze(context.Background(), nil, "app.py")
+	if err == nil || !strings.Contains(err.Error(), "failed to parse analyzer json output for app.py:") {
+		t.Fatalf("expected bridge JSON decoding error, got %v", err)
 	}
 }

@@ -282,3 +282,46 @@ func initAuth() {
 		t.Errorf("expected SourceHardcoded, got %v", evidences[0].Source.Type)
 	}
 }
+
+func TestGoAnalyzerFunctionDirective(t *testing.T) {
+	code := `package main
+import (
+	"net/http"
+	"os/exec"
+)
+func handler(w http.ResponseWriter, r *http.Request) {
+	exec.Command("sh", "-c", r.URL.Query().Get("cmd"))
+}
+`
+	tests := []struct {
+		name      string
+		analyze   bool
+		wantCount int
+		wantID    string
+		wantMode  string
+	}{
+		{name: "inactive directive", analyze: false, wantCount: 0},
+		{name: "active directive metadata", analyze: true, wantCount: 1, wantID: "main_go-handler-7", wantMode: "targeted"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ga := NewGoAnalyzer()
+			ga.SetDirectives(map[string]analyzer.AnalysisDirectives{
+				"main_go-handler-candidate": {
+					Analyze: test.analyze, CandidateID: test.wantID, Mode: test.wantMode,
+				},
+			})
+			evidences, err := ga.Analyze(context.Background(), []byte(code), "main.go")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(evidences) != test.wantCount {
+				t.Fatalf("expected %d evidences, got %d: %#v", test.wantCount, len(evidences), evidences)
+			}
+			if test.wantCount > 0 && (evidences[0].CandidateID != test.wantID || evidences[0].Mode != test.wantMode) {
+				t.Fatalf("expected directive metadata candidate=%q mode=%q, got candidate=%q mode=%q", test.wantID, test.wantMode, evidences[0].CandidateID, evidences[0].Mode)
+			}
+		})
+	}
+}
